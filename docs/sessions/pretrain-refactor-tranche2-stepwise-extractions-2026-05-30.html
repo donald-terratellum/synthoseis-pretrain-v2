@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pretrain Refactor Tranche 2 Stepwise Extractions (2026-05-30)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 2rem auto; max-width: 980px; line-height: 1.5; color: #1f2937; }
+    h1, h2 { color: #0f172a; }
+    code { background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul { margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Pretrain Refactor Tranche 2 Stepwise Extractions (2026-05-30)</h1>
+
+  <h2>Context And Goals</h2>
+  <ul>
+    <li>Continue the refactor from a large monolithic training script into focused modules.</li>
+    <li>Keep strict cadence: one extraction unit at a time, then immediate green gate checks.</li>
+    <li>Preserve runtime behavior while improving structure around CLI/runtime separation, dataset lifecycle handling, thermal controls, visualization helpers, validation helpers, and train-loop helpers.</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Split CLI/runtime entrypoints and replaced old monolithic train entrypoint.</li>
+    <li>Added and wired helper modules: <code>_ema.py</code>, <code>_checkpoint.py</code>, <code>_scheduler.py</code>, <code>_criterion.py</code>, <code>_dataset_manager.py</code>, <code>_thermal.py</code>, <code>_dataset_figures.py</code>, <code>_validation_figures.py</code>, <code>_validation_schedule.py</code>, <code>_validation_loop.py</code>, <code>_train_figures.py</code>, <code>_train_progress.py</code>, <code>_train_batch_fetch.py</code>, <code>_train_step.py</code>.</li>
+    <li>Added <code>src/synthoseis_pre_train/pretrain.py</code> and <code>train_cli.py</code>.</li>
+    <li>Deleted <code>train.py</code>.</li>
+    <li>Updated docs/scripts/tests: <code>README.md</code>, <code>train_multi_datasets.sh</code>, <code>tests/test_train_epoch_smoke.py</code>, <code>tests/test_train_cli.py</code>.</li>
+  </ul>
+
+  <h2>How Was It Done</h2>
+  <ol>
+    <li>Identify one cohesive extraction block.</li>
+    <li>Move it to a dedicated helper module.</li>
+    <li>Rewire imports and call sites in <code>pretrain.py</code>.</li>
+    <li>Fix diagnostics immediately.</li>
+    <li>Run the green gate: <code>uv run python -m pytest tests/test_train_cli.py tests/test_train_epoch_smoke.py -q</code>.</li>
+  </ol>
+
+  <h2>When Was It Done And By Whom</h2>
+  <ul>
+    <li>Date: 2026-05-30</li>
+    <li>Authoring workflow: Donald PG + GitHub Copilot coding agent (GPT-5.3-Codex)</li>
+    <li>Process: interactive, incremental, test-gated session in VS Code.</li>
+  </ul>
+
+  <h2>Basic Info (Relevant Commits, Files Involved)</h2>
+  <ul>
+    <li>Branch: <code>main</code></li>
+    <li>Files involved: <code>README.md</code>, <code>train_cli.py</code>, <code>train.py</code> (deleted), <code>train_multi_datasets.sh</code>, <code>tests/test_train_cli.py</code>, <code>tests/test_train_epoch_smoke.py</code>, <code>src/synthoseis_pre_train/pretrain.py</code>, and extracted helper modules under <code>src/synthoseis_pre_train/</code>.</li>
+    <li>Relevant commit(s): recorded in commit/push report output.</li>
+  </ul>
+
+  <h2>Next And Future Follow-Up Work Suggestions</h2>
+  <ul>
+    <li>Continue shrinking <code>pretrain.py</code> by extracting remaining orchestration chunks from <code>_run_training_with_args</code>.</li>
+    <li>Introduce dedicated orchestrator boundaries for setup, epoch lifecycle, and checkpoint policy.</li>
+    <li>Add targeted tests for extracted helpers beyond smoke tests (dataset invariants, train-step accumulation, validation edge paths).</li>
+    <li>Reconcile deferred items in the two-agent plan and mark closure explicitly.</li>
+  </ul>
+</body>
+</html>

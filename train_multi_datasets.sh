@@ -300,7 +300,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --ema-decay NUM      EMA decay (default: 0.999; <=0 disables)"
       echo "  --ema-update-every N EMA update cadence in optimizer steps (default: 1)"
       echo "  --kernel-sizes 'K1 K2 ...'"
-      echo "                       Optional odd per-stage kernel schedule forwarded to train.py"
+      echo "                       Optional odd per-stage kernel schedule forwarded to train_cli.py"
       echo "                       (example: '7 5 3 3'; default keeps legacy 3x3 kernels)"
   echo "  --hidden-dims 'C1 C2 ...'"
       echo "                       Channel widths per encoder stage (default: '32 64 128 256')"
@@ -359,8 +359,8 @@ echo "Thermal cooldown:   ${THERMAL_COOLDOWN_SEC}s"
 echo "Thermal check rate: every ${THERMAL_CHECK_EVERY_BATCHES} batches"
 echo "Thermal pressure trip level: ${THERMAL_PRESSURE_TRIP_LEVEL}"
 echo "LR schedule:        ${LR_SCHEDULE}"
-echo "Optimizer:          Adam (fixed in train.py)"
-echo "Base LR:            train.py default (1e-4, unless passed directly to train.py --lr)"
+echo "Optimizer:          Adam (fixed in train_cli.py)"
+echo "Base LR:            train_cli.py default (1e-4, unless passed directly to train_cli.py --lr)"
 echo "LR poly power:      ${LR_POLY_POWER}"
 echo "LR min:             ${LR_MIN}"
 echo "LR warmup:          ${LR_WARMUP_EPOCHS} epoch(s), start factor ${LR_WARMUP_START_FACTOR}"
@@ -417,10 +417,10 @@ fi
 echo "Found ${INITIAL_COUNT} dataset folder(s) in ${DATA_FOLDER} at startup"
 echo ""
 
-# Train — train.py re-scans DATA_FOLDER at the start of each epoch and
+# Train — train_cli.py re-scans DATA_FOLDER at the start of each epoch and
 # incorporates new datasets automatically.  The set-difference split logic
 # guarantees that no dataset ever appears in both train and val.
-uv run python -u train.py \
+uv run python -u train_cli.py \
     --data_folder "${DATA_FOLDER}" \
     --batch_size "${BATCH_SIZE}" \
     --epochs "${MAX_EPOCHS}" \

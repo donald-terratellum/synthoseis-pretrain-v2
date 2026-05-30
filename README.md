@@ -53,7 +53,7 @@ uv python install 3.11
 Run commands inside the managed environment:
 
 ```bash
-uv run python train.py --data_paths /path/to/seismic.zarr --epochs 100 --batch_size 4
+uv run python train_cli.py --data_paths /path/to/seismic.zarr --epochs 100 --batch_size 4
 uv run python tests/test_gpu_resources.py
 uv run python inference.py --sample_shape 128 128 128 --batch_size 1 --device auto
 ```
@@ -161,7 +161,7 @@ Thermal signal priority:
 Pressure-based pausing is explicit and tunable with `--thermal-pressure-trip-level`.
 Typical setting is `serious`.
 
-At startup, `train.py` prints one of:
+At startup, `train_cli.py` prints one of:
 
 - `Thermal monitor: available (current CPU ... )`
 - `Thermal monitor: available via thermal pressure only (...)`
@@ -177,7 +177,7 @@ Batch progress now also reports elapsed wall time as true DHM:
 
 ### Optimisation defaults (3D medical style)
 
-`train.py` now defaults to a 3D-medical-oriented optimisation stack:
+`train_cli.py` now defaults to a 3D-medical-oriented optimisation stack:
 
 - **LR schedule**: polynomial decay (`--lr_schedule poly`)
 - **Warmup**: enabled by default (`--lr_warmup_epochs 5`, `--lr_warmup_start_factor 0.1`)
@@ -189,18 +189,18 @@ Notes:
 
 - `train_multi_datasets.sh` now exposes these optimizer flags directly.
 - CLI names in the wrapper use hyphens (for example `--grad-accum-steps`) and are mapped to
-  the matching `train.py` underscore arguments internally.
+  the matching `train_cli.py` underscore arguments internally.
 
 Example direct launch with larger effective batch via accumulation:
 
 ```bash
-uv run python train.py \
+uv run python train_cli.py \
   --data_folder /Users/donaldpg/synthoseis/fake_data \
   --epochs 100 \
   --grad_accum_steps 4
 ```
 
-Additional `train.py` options:
+Additional `train_cli.py` options:
 
 | Option | Default | Description |
 |---|---|---|
@@ -356,7 +356,7 @@ Key options:
 ### Single-dataset training (low-level)
 
 ```bash
-uv run python train.py --data_paths /path/to/seismic.zarr --epochs 100 --batch_size 4
+uv run python train_cli.py --data_paths /path/to/seismic.zarr --epochs 100 --batch_size 4
 ```
 
 ## GPU Resource Test

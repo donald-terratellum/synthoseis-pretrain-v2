@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
-from train import train_epoch
+from synthoseis_pre_train.pretrain import train_epoch
 
 
 class _TinySeismicDataset(Dataset):

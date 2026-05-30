@@ -1,0 +1,934 @@
+"""
+Training Script for Seismic 3D Mamba Pre-training
+===================================================
+"""
+
+import os
+import random
+import time
+import math
+import platform
+
+from datetime import datetime, timedelta
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+import numpy as np
+from pathlib import Path
+from typing import Any, cast
+
+import matplotlib
+matplotlib.use("Agg")
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+
+from synthoseis_pre_train.gpu_utils import (
+    get_default_device,
+    get_memory_info,
+    print_device_summary,
+    autocast_context,
+    create_grad_scaler,
+)
+from synthoseis_pre_train.models import create_model, _MAMBA_AVAILABLE
+from synthoseis_pre_train.models import report_masked_voxel_stats
+from synthoseis_pre_train._ema import ModelEMA
+from synthoseis_pre_train._checkpoint import _save_checkpoint
+from synthoseis_pre_train._scheduler import _build_lr_scheduler
+from synthoseis_pre_train._criterion import _build_criterion, _print_loss_and_backprop_summary
+from synthoseis_pre_train._dataset_manager import (
+    _discover_zarr_paths,
+    _prune_oldest_to_target,
+    _update_split,
+    _active_paths,
+    _resolve_target_counts,
+    _build_loaders,
+)
+from synthoseis_pre_train._thermal import ThermalGuard, _print_thermal_monitor_status
+from synthoseis_pre_train._dataset_figures import _log_per_dataset_figures
+from synthoseis_pre_train._validation_figures import _log_validation_crosssections
+from synthoseis_pre_train._validation_schedule import _compute_per_loader_targets
+from synthoseis_pre_train._train_figures import _log_train_merged_figure
+from synthoseis_pre_train._validation_loop import _prepare_validation_dataset, _run_validation_dataset
+from synthoseis_pre_train._train_progress import _log_train_progress_and_maybe_checkpoint
+from synthoseis_pre_train._train_batch_fetch import _fetch_train_batch
+from synthoseis_pre_train._train_step import _maybe_apply_optimizer_step
+
+
+DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
+    "lr": 1e-4,
+    "lr_schedule": "poly",
+    "loss": "huber",
+    "mae_smooth_kernel_weights": [1.0, 2.0, 1.0],
+    "huber_delta": 1.0,
+    "ssim_window_size": 7,
+    "ssim_w1": 1.0,
+    "ssim_w2": 0.0,
+    "ssim_w3": 0.0,
+    "stats_window_size": [9, 9, 9],
+    "stats_mask_mode": "none",
+    "stats_mean_weight": 1.0,
+    "stats_std_weight": 1.0,
+    "stats_min_weight": 1.0,
+    "stats_max_weight": 1.0,
+    "stats_mae_weight": 1.0,
+    "stats_mse_weight": 1.0,
+    "stats_std_ratio_clip": 10.0,
+    "grad_accum_steps": 1,
+    "grad_clip_norm": 1.0,
+    "ema_decay": 0.999,
+    "ema_update_every": 1,
+}
+
+
+def run_training(config: dict[str, Any]) -> None:
+    args_dict = config.get("args")
+    if not isinstance(args_dict, dict):
+        raise ValueError("run_training(config): expected config[args] dict")
+
+    cli_provided_raw = config.get("cli_provided")
+    if isinstance(cli_provided_raw, list):
+        cli_provided = {str(item) for item in cli_provided_raw}
+    else:
+        cli_provided = set()
+
+    backprop_defaults = dict(DEFAULT_BACKPROP_DEFAULTS)
+    incoming_defaults = config.get("backprop_defaults")
+    if isinstance(incoming_defaults, dict):
+        backprop_defaults.update({str(k): v for k, v in incoming_defaults.items()})
+
+    from types import SimpleNamespace
+
+    args = SimpleNamespace(**args_dict)
+    _run_training_with_args(args, cli_provided, backprop_defaults)
+
+
+# Defensive runtime scrub: set all Malloc* vars to "0" (explicit disable signal
+# to libmalloc) rather than unsetting — absent vars may still trigger warnings
+# on some macOS versions; "0" is the documented way to disable stack logging.
+if platform.system() == "Darwin":
+    for _k in list(os.environ.keys()):
+        if _k.startswith("Malloc"):
+            os.environ[_k] = "0"
+    # Ensure the two key vars are present even if not already in env
+    os.environ["MallocStackLogging"] = "0"
+    os.environ["MallocStackLoggingNoCompact"] = "0"
+
+
+
+def train_epoch(
+    model: nn.Module,
+    train_loader: DataLoader,
+    optimizer: optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    scaler=None,
+    writer: SummaryWriter | None = None,
+    epoch: int = 0,
+    output_dir: Path | None = None,
+    train_paths: list[str] | None = None,
+    val_paths: list[str] | None = None,
+    thermal_guard: ThermalGuard | None = None,
+    grad_accum_steps: int = 1,
+    grad_clip_norm: float = 0.0,
+    ema: ModelEMA | None = None,
+    ema_update_every: int = 1,
+    max_batches: int | None = None,
+    return_details: bool = False,
+) -> float | dict[str, float | int | bool]:
+    """
+    Train for one epoch using a single merged train DataLoader.
+
+    The loader is expected to draw samples from all source datasets through
+    ConcatDataset + shuffle so each optimizer step sees mixed data.
+    """
+    model.train()
+    total_loss = 0.0
+    total_batches = 0
+    accum_steps = max(1, int(grad_accum_steps))
+    ema_every = max(1, int(ema_update_every))
+    optimizer_steps = 0
+    micro_batches = 0
+    optimizer.zero_grad(set_to_none=True)
+
+    window_start = time.monotonic()
+    nz_pct_sum = 0.0
+    last_input = None
+    last_output = None
+    last_target = None
+
+    try:
+        natural_batches = len(train_loader)
+    except Exception as e:
+        print(f"    WARNING: train loader length unavailable — {e}")
+        natural_batches = 0
+
+    if natural_batches == 0:
+        avg_loss = float("nan")
+        if return_details:
+            return {
+                "loss": avg_loss,
+                "batches_processed": 0,
+                "reload_requested": False,
+            }
+        return avg_loss
+
+    target_batches = natural_batches if max_batches is None else max(1, int(max_batches))
+    iter_start_t0 = time.monotonic()
+    loader_iter = iter(train_loader)
+    iter_elapsed_min = (time.monotonic() - iter_start_t0) / 60.0
+    print(f"    Train iterator/sampler startup: {iter_elapsed_min:04.1f}m")
+    reload_requested = False
+    for batch_idx in range(target_batches):
+        fetch_result = _fetch_train_batch(
+            loader_iter=loader_iter,
+            train_loader=train_loader,
+            device=device,
+            batch_idx=batch_idx,
+        )
+        loader_iter = fetch_result.loader_iter
+        if fetch_result.should_break:
+            reload_requested = fetch_result.reload_requested
+            break
+        input_data = fetch_result.input_data
+        target = fetch_result.target
+        mask = fetch_result.mask
+        if input_data is None or target is None or mask is None:
+            reload_requested = True
+            break
+
+        with autocast_context(device):
+            output = model(input_data)
+            # loss = criterion(output[~mask], target[~mask])
+            loss = criterion(output, target)  # TODO: switch to masked loss when stable ?
+        if batch_idx < 10:
+            report_masked_voxel_stats(input_data)
+        batch_loss = loss.item()
+        scaled_loss = loss / accum_steps
+
+        if scaler is not None:
+            scaler.scale(scaled_loss).backward()
+        else:
+            scaled_loss.backward()
+
+        micro_batches, optimizer_steps = _maybe_apply_optimizer_step(
+            scaler=scaler,
+            optimizer=optimizer,
+            model=model,
+            grad_clip_norm=grad_clip_norm,
+            micro_batches=micro_batches,
+            accum_steps=accum_steps,
+            batch_idx=batch_idx,
+            target_batches=target_batches,
+            optimizer_steps=optimizer_steps,
+            ema=ema,
+            ema_every=ema_every,
+        )
+
+        temp_c = None
+        if thermal_guard is not None:
+            temp_c = thermal_guard.sample_temperature(batch_idx)
+
+        if thermal_guard is not None:
+            thermal_guard.maybe_pause(
+                epoch=epoch,
+                ds_idx=-1,
+                batch_idx=batch_idx,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                train_paths=train_paths or [],
+                val_paths=val_paths or [],
+                temp_c=temp_c,
+                ema_state=ema.state_dict() if ema is not None else None,
+            )
+
+        total_loss += batch_loss
+        total_batches += 1
+
+        with torch.no_grad():
+            x_nz = (input_data != 0).sum().item()
+            y_nz = (target != 0).sum().item()
+            batch_pct = (x_nz / y_nz * 100.0) if y_nz > 0 else 0.0
+        nz_pct_sum += batch_pct
+
+        # Keep last batch tensors for end-of-epoch diagnostic plotting.
+        last_input = input_data[0].detach().cpu()
+        last_output = output[0].detach().cpu()
+        last_target = target[0].detach().cpu()
+
+        if (batch_idx + 1) % 10 == 0:
+            window_start = _log_train_progress_and_maybe_checkpoint(
+                batch_idx=batch_idx,
+                target_batches=target_batches,
+                batch_loss=batch_loss,
+                nz_pct_sum=nz_pct_sum,
+                total_batches=total_batches,
+                window_start=window_start,
+                thermal_guard=thermal_guard,
+                output_dir=output_dir,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                epoch=epoch,
+                total_loss=total_loss,
+                train_paths=train_paths,
+                val_paths=val_paths,
+                ema_state=ema.state_dict() if ema is not None else None,
+            )
+
+    if (
+        writer is not None
+        and last_input is not None
+        and last_output is not None
+        and last_target is not None
+    ):
+        avg_epoch_loss = total_loss / max(total_batches, 1)
+        _log_train_merged_figure(
+            writer,
+            last_input,
+            last_output,
+            last_target,
+            epoch,
+            avg_epoch_loss,
+        )
+
+    avg_loss = total_loss / max(total_batches, 1)
+    if return_details:
+        return {
+            "loss": avg_loss,
+            "batches_processed": total_batches,
+            "reload_requested": reload_requested,
+        }
+    return avg_loss
+
+
+def validate(
+    model: nn.Module,
+    val_loaders: list,
+    criterion: nn.Module,
+    device: torch.device,
+    writer: SummaryWriter | None = None,
+    epoch: int = 0,
+    thermal_guard: ThermalGuard | None = None,
+    max_batches: int | None = None,
+) -> float:
+    """
+    Validate the model across all validation datasets.
+
+    At the end of each validation dataset, logs 4 separate cross-section figures
+    to TensorBoard (input & output × center-X & center-Y). In the TensorBoard UI,
+    select tag prefixes to toggle between input/output for each slice direction.
+    """
+    if not val_loaders:
+        return float('nan')
+
+    model.eval()
+    total_loss = 0.0
+    total_batches = 0
+    val_start = time.monotonic()
+    window_start = val_start
+    per_loader_targets = _compute_per_loader_targets(max_batches, len(val_loaders))
+
+    with torch.no_grad():
+        for ds_idx, (ds_name, loader) in enumerate(val_loaders):
+            target_for_loader = per_loader_targets[ds_idx]
+            target_ds_batches = _prepare_validation_dataset(
+                loader=loader,
+                target_for_loader=target_for_loader,
+                ds_name=ds_name,
+                ds_idx=ds_idx,
+                total_datasets=len(val_loaders),
+            )
+            if target_ds_batches is None:
+                continue
+
+            ds_result = _run_validation_dataset(
+                model=model,
+                loader=loader,
+                criterion=criterion,
+                device=device,
+                target_ds_batches=target_ds_batches,
+                window_start=window_start,
+                ds_name=ds_name,
+                thermal_guard=thermal_guard,
+            )
+            ds_loss = ds_result.ds_loss
+            ds_batches = ds_result.ds_batches
+            first_input = ds_result.first_input
+            first_output = ds_result.first_output
+            first_target = ds_result.first_target
+            window_start = ds_result.window_start
+            total_loss += ds_loss
+            total_batches += ds_batches
+
+            # --- Per-val-dataset: 4 separate TensorBoard images ---
+            # Tags are structured so TensorBoard shows paired input/output
+            # under the same group for each slice direction.
+            if (
+                writer is not None
+                and first_input is not None
+                and first_output is not None
+                and first_target is not None
+            ):
+                avg_ds_loss = ds_loss / max(ds_batches, 1)
+                _log_validation_crosssections(
+                    writer,
+                    ds_name,
+                    first_input,
+                    first_output,
+                    first_target,
+                    epoch,
+                    avg_ds_loss,
+                )
+
+    return total_loss / max(total_batches, 1)
+
+
+DEFAULT_ARRAY_KEYS = [
+    "seismicCubes_cumsum__17_degrees",
+    # "seismicCubes_cumsum__17_degrees_normalized",
+    "seismicCubes_cumsum__29_degrees",
+    # "seismicCubes_cumsum__29_degrees_normalized",
+    "seismicCubes_cumsum__5_degrees",
+    # "seismicCubes_cumsum__5_degrees_normalized",
+    # "seismicCubes_cumsum_17_degrees_normalized_augmented",
+    # "seismicCubes_cumsum_29_degrees_normalized_augmented",
+    # "seismicCubes_cumsum_5_degrees_normalized_augmented",
+    "seismicCubes_cumsum_fullstack",
+    # "seismicCubes_cumsum_fullstack_noise_free"
+]
+
+DEFAULT_GEOLOGIC_SCORE_KEYS = [
+    "geological_score",
+    "geologic_score",
+]
+
+
+def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dict[str, object]) -> None:
+    def _config_error(message: str) -> None:
+        raise ValueError(message)
+
+    if not (0.0 < args.val_split_ratio < 1.0):
+        _config_error("--val_split_ratio must be between 0 and 1 (exclusive)")
+    if args.train_batches_per_epoch is not None and args.train_batches_per_epoch <= 0:
+        _config_error("--train_batches_per_epoch must be > 0")
+    if args.val_batches_per_epoch is not None and args.val_batches_per_epoch <= 0:
+        _config_error("--val_batches_per_epoch must be > 0")
+    if args.refresh_every_batches < 0:
+        _config_error("--refresh_every_batches must be >= 0")
+    if args.kernel_sizes is not None:
+        hidden_dims_val = tuple(args.hidden_dims)
+        if len(args.kernel_sizes) != len(hidden_dims_val):
+            _config_error(
+                "--kernel_sizes length must match hidden dims "
+                f"({len(hidden_dims_val)} values expected for {hidden_dims_val})"
+            )
+        if any(k <= 0 or k % 2 == 0 for k in args.kernel_sizes):
+            _config_error("--kernel_sizes values must be positive odd integers")
+    if args.ssim_window_size < 3 or args.ssim_window_size % 2 == 0:
+        _config_error("--ssim_window_size must be an odd integer >= 3")
+    if min(args.sample_shape) < args.ssim_window_size:
+        _config_error(
+            "--ssim_window_size must be <= each sample_shape dimension "
+            f"(got window={args.ssim_window_size}, sample_shape={tuple(args.sample_shape)})"
+        )
+    if args.loss == "ssim" and (args.ssim_w1 < 0 or args.ssim_w2 < 0 or args.ssim_w3 < 0):
+        _config_error("--ssim_w1, --ssim_w2, and --ssim_w3 must be >= 0")
+    if any(int(v) <= 0 for v in args.stats_window_size):
+        _config_error("--stats_window_size entries must be positive integers")
+    if args.stats_std_ratio_clip <= 1.0:
+        _config_error("--stats_std_ratio_clip must be > 1.0")
+    if min(
+        args.stats_mean_weight,
+        args.stats_std_weight,
+        args.stats_min_weight,
+        args.stats_max_weight,
+        args.stats_mae_weight,
+        args.stats_mse_weight,
+    ) < 0:
+        _config_error("--stats_*_weight values must be >= 0")
+    if len(args.mae_smooth_kernel_weights) < 3 or len(args.mae_smooth_kernel_weights) % 2 == 0:
+        _config_error("--mae_smooth_kernel_weights must contain an odd number of values >= 3")
+    if any(v < 0 for v in args.mae_smooth_kernel_weights):
+        _config_error("--mae_smooth_kernel_weights values must be >= 0")
+    if sum(float(v) for v in args.mae_smooth_kernel_weights) <= 0:
+        _config_error("--mae_smooth_kernel_weights must sum to > 0")
+
+    if not args.data_paths and not args.data_folder:
+        _config_error("At least one of --data_paths or --data_folder must be provided")
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    device = get_default_device(args.device)
+    print_device_summary(args.device)
+
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+    if device.type == "mps" and hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
+
+    # --- Dataset split (done once; restored from checkpoint on resume) ---
+    # Build initial path list: explicit --data_paths + discover from --data_folder
+    all_paths = list(dict.fromkeys(args.data_paths))  # deduplicate preserving order
+    discovered_at_start: list[str] = []
+    if args.data_folder:
+        discovered_at_start = _discover_zarr_paths(args.data_folder, args.dataset_glob)
+        known = set(all_paths)
+        all_paths = all_paths + [p for p in discovered_at_start if p not in known]
+
+    # Check for a saved split in the resume checkpoint BEFORE shuffling
+    saved_train_paths = None
+    saved_val_paths   = None
+    if args.resume and Path(args.resume).exists():
+        _peek = torch.load(args.resume, map_location="cpu")
+        saved_train_paths = _peek.get("train_paths")
+        saved_val_paths   = _peek.get("val_paths")
+        del _peek
+
+    initial_num_train, initial_num_val = _resolve_target_counts(
+        len(all_paths), args.val_split_ratio
+    )
+
+    if saved_train_paths is not None and saved_val_paths is not None:
+        supplied = set(all_paths)
+
+        # Drop paths that no longer exist in the supplied list; deduplicate in case
+        # a previous run saved a corrupt split with duplicate entries
+        kept_train = list(dict.fromkeys(p for p in saved_train_paths if p in supplied))
+        kept_val   = list(dict.fromkeys(p for p in saved_val_paths   if p in supplied))
+        dropped    = [p for p in (saved_train_paths + saved_val_paths) if p not in supplied]
+        if dropped:
+            print(f"Checkpoint split: dropped {len(dropped)} path(s) no longer supplied:")
+            for p in dropped:
+                print(f"  - {Path(p).parent.name}")
+
+        # Identify new paths not present in the checkpoint split at all
+        checkpoint_all = set(saved_train_paths) | set(saved_val_paths)
+        new_paths = [p for p in all_paths if p not in checkpoint_all]
+
+        if new_paths:
+            # Assign new paths to fill deficits (val first when both short)
+            new_train, new_val = [], []
+            for p in new_paths:
+                train_need = initial_num_train - len(kept_train) - len(new_train)
+                val_need   = initial_num_val   - len(kept_val)   - len(new_val)
+                if val_need > 0:
+                    new_val.append(p)
+                elif train_need > 0:
+                    new_train.append(p)
+                else:
+                    break
+            kept_train += new_train
+            kept_val   += new_val
+            if new_train or new_val:
+                print(f"Checkpoint split: {len(new_train) + len(new_val)} new dataset(s) assigned, "
+                      f"{len(new_train)} to train, {len(new_val)} to val:")
+                for p in new_train:
+                    print(f"  train: {Path(p).parent.name}")
+                for p in new_val:
+                    print(f"    val: {Path(p).parent.name}")
+
+        train_paths = kept_train
+        val_paths   = kept_val
+        split_target_train = len(train_paths)
+        split_target_val = len(val_paths)
+        print(f"Restored split: {len(train_paths)} train, {len(val_paths)} val datasets.")
+    else:
+        # Use newest (num_train + num_val) datasets; all_paths is oldest-first.
+        # Assign newest num_val to val, next num_train to train.
+        target_total = initial_num_train + initial_num_val
+        pool = all_paths[-target_total:] if len(all_paths) > target_total else all_paths
+        val_paths   = pool[-initial_num_val:]  if initial_num_val > 0 else []
+        train_paths = pool[:-initial_num_val]  if initial_num_val > 0 else list(pool)
+        train_paths = train_paths[-initial_num_train:] if len(train_paths) > initial_num_train else train_paths
+        split_target_train = initial_num_train
+        split_target_val = initial_num_val
+
+    _dset_startup = set(discovered_at_start) if args.data_folder else set(all_paths)
+    _at = _active_paths(train_paths, split_target_train, _dset_startup)
+    _av = _active_paths(val_paths,   split_target_val,   _dset_startup)
+    print(
+        f"Dataset split ({split_target_train} train, {split_target_val} val target): "
+        f"{len(_at)} train, {len(_av)} val"
+    )
+    print(f"  Train: {[Path(p).parent.name for p in _at]}")
+    if _av:
+        print(f"  Val:   {[Path(p).parent.name for p in _av]}")
+    print()
+
+    # --- Model + memory diagnostic (must run before dataloaders so we can set batch size) ---
+    print("Creating model...")
+    if args.use_mamba and not _MAMBA_AVAILABLE:
+        print("WARNING: --use_mamba requested but mamba_ssm not installed; falling back to ResBlock3d")
+    if args.kernel_sizes is None:
+        print("Kernel schedule: default legacy 3x3 across stages")
+    else:
+        print(f"Kernel schedule: {tuple(args.kernel_sizes)}")
+    print(f"Channels schedule: {tuple(args.hidden_dims)}")
+    model = create_model(
+        use_mamba=args.use_mamba,
+        input_channels=1,
+        hidden_dims=tuple(args.hidden_dims),
+        kernel_sizes=tuple(args.kernel_sizes) if args.kernel_sizes is not None else None,
+        spatial_size=tuple(args.sample_shape),
+        deep_reconstruction_head=args.deep_reconstruction_head,
+    ).to(device)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {n_params:,}")
+
+    weights_bytes  = sum(p.numel() * p.element_size() for p in model.parameters())
+    grads_bytes    = weights_bytes
+    adam_bytes     = 2 * weights_bytes
+    fixed_bytes    = weights_bytes + grads_bytes + adam_bytes
+
+    S = args.sample_shape
+    hidden = tuple(args.hidden_dims)
+    n = len(hidden)
+    def _fm(b, c, s): return b * c * s[0] * s[1] * s[2] * 4
+    # Encoder scales [0..n-1] + decoder mirrors [n-2..0]
+    _scales = list(range(n)) + list(range(n - 2, -1, -1))
+    act_per_sample = 2 * sum(
+        _fm(1, hidden[i], [d // (2 ** i) for d in S])
+        for i in _scales
+    )
+    io_per_sample  = 2 * int(np.prod(S)) * 4
+    per_sample_var = act_per_sample + io_per_sample
+
+    # Peak-overhead factor: empirically calibrated from OOM crashes on M4 24 GB.
+    #   batch=7 (with grad checkpointing): MPS allocated 24.09 GiB at crash.
+    #   formula raw per-sample: 1.433 GB.  Observed: 24.09/7 = 3.44 GB → ratio 2.40x.
+    # Use 2.5 for a small margin above observed.
+    PEAK_FACTOR = 2.5
+    per_sample_peak = per_sample_var * PEAK_FACTOR
+
+    def _total(bs): return fixed_bytes + bs * per_sample_peak
+
+    mem_info   = get_memory_info(device)
+    total_mem  = mem_info["total_bytes"]
+    if total_mem is None:
+        raise RuntimeError("Unable to determine total device memory (mem_info['total_bytes'] is None)")
+
+    # MPS can exceed reported RAM via unified memory.  The actual ceiling
+    # (PYTORCH_MPS_HIGH_WATERMARK_RATIO default) is ~1.17 × reported RAM.
+    # Observed: 30.19 GiB limit on a 25.77 GB device → ratio 1.172.
+    MPS_WATERMARK = 1.172 if device.type == "mps" else 1.0
+    mps_ceiling   = total_mem * MPS_WATERMARK
+
+    # "other allocations" (Python, CPU tensors, MPS driver bookkeeping).
+    # Observed stable at ~6 GB across all OOM crashes.
+    OTHER_ALLOCS  = 6 * 1024**3
+    available     = mps_ceiling - OTHER_ALLOCS
+    safe_limit    = available * 0.85   # 15% headroom within available MPS model budget
+
+    # Respect the requested batch size.  Compute the max safe size only for diagnostics
+    # and to clamp obviously unsafe requests.
+    safe_max_bs = 1
+    while _total(safe_max_bs + 1) < safe_limit:
+        safe_max_bs += 1
+
+    requested_batch_size = max(1, int(args.batch_size))
+    if requested_batch_size > safe_max_bs:
+        print(
+            f"WARNING: requested batch size {requested_batch_size} exceeds estimated safe max "
+            f"{safe_max_bs}; clamping to {safe_max_bs}."
+        )
+        batch_size = safe_max_bs
+    else:
+        batch_size = requested_batch_size
+
+    pressure   = "OK" if _total(batch_size) < safe_limit else "PRESSURE"
+    current_gb = _total(batch_size) / 1e9
+
+    print(f"""Memory estimate (batch={batch_size}):
+  Weights:              {weights_bytes/1e9:.2f} GB
+  Gradients:            {grads_bytes/1e9:.2f} GB
+  Adam states:          {adam_bytes/1e9:.2f} GB
+  Activations+temps:    {batch_size * per_sample_peak/1e9:.2f} GB  ({batch_size} x {per_sample_peak/1e9:.2f} GB/sample, {PEAK_FACTOR}x peak factor)
+  -------------------------------------------------
+  Total estimated:      {current_gb:.2f} GB  [{pressure}]
+  MPS ceiling:          {mps_ceiling/1e9:.2f} GB  ({MPS_WATERMARK}x reported RAM)
+  Other allocations:    ~{OTHER_ALLOCS/1e9:.2f} GB  (Python + MPS driver)
+  Available for model:  {available/1e9:.2f} GB  (safe limit: {safe_limit/1e9:.2f} GB)
+  Headroom:             {(safe_limit - _total(batch_size))/1e9:.2f} GB
+    Safe max batch size:  {safe_max_bs}
+    Using batch size:     {batch_size}""", flush=True)
+    print()
+
+    # macOS multiprocessing workers crash with zarr + MPS (exit code 255).
+    # Use num_workers=0 (main-process loading) on macOS; workers only on Linux.
+    import platform
+    _num_workers = 0 if platform.system() == "Darwin" else min(4, os.cpu_count() or 1)
+
+    loader_kwargs = dict(
+        batch_size=batch_size,
+        sample_shape=tuple(args.sample_shape),
+        num_workers=_num_workers,
+        pin_memory=(device.type == "cuda"),
+        normalize=True,
+        target_std=1.0,
+        trace_mask_ratio=0.07,
+        array_keys=args.array_keys,
+        geologic_score_sampling=(not args.disable_geologic_score_sampling),
+        geologic_score_min=float(args.geologic_score_min),
+        geologic_score_key_candidates=args.geologic_score_keys,
+        geologic_points_json_name=args.geologic_points_json_name,
+        geologic_val_center_json_name=args.geologic_val_center_json_name,
+        geologic_target_points=int(args.geologic_target_points),
+        geologic_candidate_count=int(args.geologic_candidate_count),
+        geologic_candidate_probes=int(args.geologic_candidate_probes),
+        geologic_dist_thresh_start=int(args.geologic_dist_thresh_start),
+        geologic_dist_thresh_floor=int(args.geologic_dist_thresh_floor),
+    )
+
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    criterion = _build_criterion(args)
+    scaler = create_grad_scaler(device)
+    ema = ModelEMA(model, args.ema_decay) if args.ema_decay > 0 else None
+    _print_loss_and_backprop_summary(args, cli_provided, backprop_defaults, scaler)
+    thermal_guard = ThermalGuard(
+        max_c=args.thermal_max_c,
+        cooldown_sec=args.thermal_cooldown_sec,
+        check_every_batches=args.thermal_check_every_batches,
+        output_dir=output_dir,
+        pressure_trip_level=args.thermal_pressure_trip_level,
+    )
+    _print_thermal_monitor_status(args.thermal_max_c, args.thermal_pressure_trip_level)
+
+    # TensorBoard writer — view with: tensorboard --logdir checkpoints/runs
+    tb_log_dir = output_dir / "runs"
+    writer = SummaryWriter(log_dir=str(tb_log_dir))
+    print(f"TensorBoard logs: {tb_log_dir}")
+    print("  Launch viewer: tensorboard --logdir checkpoints/runs")
+
+    start_epoch = 0
+    if args.resume:
+        print(f"Resuming from checkpoint: {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=device)
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        if scaler is not None and checkpoint.get("scaler") is not None:
+            scaler.load_state_dict(checkpoint["scaler"])
+        if ema is not None and checkpoint.get("ema_state") is not None:
+            ema.load_state_dict(checkpoint["ema_state"])
+        start_epoch = checkpoint["epoch"] + 1
+        ds_idx_done = checkpoint.get("ds_idx", -1)
+        if ds_idx_done >= 0:
+            print(f"  Partial epoch {start_epoch}: completed datasets 0..{ds_idx_done}")
+            print("  Note: epoch restarts from the beginning (datasets are randomly ordered)")
+        print(f"  Continuing from epoch {start_epoch + 1}")
+
+    scheduler = _build_lr_scheduler(optimizer, args)
+    # Do not step scheduler here; stepping before any optimizer.step() triggers
+    # a PyTorch warning and can skip the first scheduled LR value.
+    if scheduler is not None and start_epoch > 0:
+        scheduler.last_epoch = start_epoch - 1
+
+    print("  Epoch sizing:")
+    if args.train_batches_per_epoch is not None:
+        print(
+            f"    train: fixed {args.train_batches_per_epoch} batches "
+            "(dataset list is fixed within each epoch; refreshed at epoch start)"
+        )
+    else:
+        print("    train: all batches from merged train loader")
+    if args.val_batches_per_epoch is not None:
+        print(f"    val: fixed {args.val_batches_per_epoch} batches")
+    else:
+        print("    val: all batches from val loaders")
+
+    print("\nStarting training...")
+    training_start = time.monotonic()
+    for epoch in range(start_epoch, args.epochs):
+        epoch_start = time.monotonic()
+        current_lr = optimizer.param_groups[0]["lr"]
+        epoch_stamp = datetime.now().strftime("%Y-%-m-%-d %H:%M:%S")
+        print(f"\nEpoch {epoch + 1}/{args.epochs} | LR: {current_lr:.3e} | {epoch_stamp}")
+
+        # Re-scan once per epoch, prune oldest on disk to fixed target count,
+        # then keep the active train/val set fixed until next epoch.
+        if args.data_folder:
+            discovered = _discover_zarr_paths(args.data_folder, args.dataset_glob)
+            keep_total = split_target_train + split_target_val
+            discovered = _prune_oldest_to_target(
+                args.data_folder,
+                args.dataset_glob,
+                discovered,
+                keep_total,
+            )
+            train_paths, val_paths = _update_split(
+                discovered, train_paths, val_paths, split_target_train, split_target_val
+            )
+            _dset = set(discovered)
+        else:
+            _dset = {p for p in (train_paths + val_paths) if Path(p).parent.exists()}
+
+        active_train = _active_paths(train_paths, split_target_train, _dset)
+        active_val   = _active_paths(val_paths,   split_target_val,   _dset)
+        print(f"Dataset split ({split_target_train} train, {split_target_val} val target): "
+              f"{len(active_train)} train, {len(active_val)} val")
+        print(f"  Train: {[Path(p).parent.name for p in active_train]}")
+        if active_val:
+            print(f"  Val:   {[Path(p).parent.name for p in active_val]}")
+        train_loader = None
+        val_loaders = []
+
+        if args.train_batches_per_epoch is None:
+            train_loader, val_loaders = _build_loaders(
+                active_train,
+                active_val,
+                loader_kwargs,
+                train_batches_per_epoch=args.train_batches_per_epoch,
+                val_batches_per_epoch=args.val_batches_per_epoch,
+            )
+            if train_loader is None:
+                print("  WARNING: No usable training datasets this epoch; skipping.")
+                continue
+
+            train_loss = cast(float, train_epoch(
+                model, train_loader, optimizer, criterion, device,
+                scaler=scaler, writer=writer, epoch=epoch, output_dir=output_dir,
+                train_paths=train_paths, val_paths=val_paths,
+                thermal_guard=thermal_guard,
+                grad_accum_steps=args.grad_accum_steps,
+                grad_clip_norm=args.grad_clip_norm,
+                ema=ema,
+                ema_update_every=args.ema_update_every,
+            ))
+        else:
+            target_batches = max(1, int(args.train_batches_per_epoch))
+            batches_done = 0
+            weighted_loss_sum = 0.0
+            pending_chunk_reload = False
+
+            while batches_done < target_batches:
+                _reload_t0 = time.monotonic()
+                train_loader, val_loaders = _build_loaders(
+                    active_train,
+                    active_val,
+                    loader_kwargs,
+                    train_batches_per_epoch=args.train_batches_per_epoch,
+                    val_batches_per_epoch=args.val_batches_per_epoch,
+                )
+                _reload_elapsed = time.monotonic() - _reload_t0
+                if pending_chunk_reload:
+                    print(f"  Reloaded train/val loaders in {_reload_elapsed:.2f}s")
+                    pending_chunk_reload = False
+                if train_loader is None:
+                    print("  WARNING: No usable training datasets this epoch; skipping remaining batches.")
+                    break
+
+                remaining = target_batches - batches_done
+
+                details = train_epoch(
+                    model, train_loader, optimizer, criterion, device,
+                    scaler=scaler, writer=writer, epoch=epoch, output_dir=output_dir,
+                    train_paths=train_paths, val_paths=val_paths,
+                    thermal_guard=thermal_guard,
+                    grad_accum_steps=args.grad_accum_steps,
+                    grad_clip_norm=args.grad_clip_norm,
+                    ema=ema,
+                    ema_update_every=args.ema_update_every,
+                    max_batches=remaining,
+                    return_details=True,
+                )
+                if not isinstance(details, dict):
+                    raise RuntimeError("train_epoch(return_details=True) returned non-dict details")
+                chunk_batches = int(details["batches_processed"])
+                if chunk_batches <= 0:
+                    print("  WARNING: train epoch chunk processed 0 batches; stopping epoch early.")
+                    break
+
+                weighted_loss_sum += float(details["loss"]) * chunk_batches
+                batches_done += chunk_batches
+
+                if not bool(details["reload_requested"]):
+                    break
+
+                pending_chunk_reload = True
+
+            train_loss = float(weighted_loss_sum / max(1, batches_done))
+
+        if writer is not None and train_loader is not None:
+            _log_per_dataset_figures(
+                model, train_loader, device, writer, epoch, train_loss
+            )
+
+        using_ema = ema is not None
+        if using_ema:
+            ema.store(model)
+            ema.copy_to(model)
+        val_loss = validate(
+            model, val_loaders, criterion, device,
+            writer=writer, epoch=epoch, thermal_guard=thermal_guard,
+            max_batches=args.val_batches_per_epoch,
+        )
+        if using_ema:
+            ema.restore(model)
+
+        # Log scalar losses to TensorBoard
+        writer.add_scalar("loss/train", train_loss, global_step=epoch + 1)
+        writer.add_scalar("lr", current_lr, global_step=epoch + 1)
+        if val_loaders:
+            writer.add_scalar("loss/val", val_loss, global_step=epoch + 1)
+
+        if val_loaders:
+            print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        else:
+            print(f"Train Loss: {train_loss:.4f}")
+
+        # End-of-epoch versioned checkpoint (never overwritten)
+        epoch_ckpt = output_dir / f"checkpoint_epoch_{epoch + 1:04d}.pt"
+        _save_checkpoint(epoch_ckpt, model, optimizer, scaler, epoch,
+                         train_loss=train_loss, val_loss=val_loss,
+                         train_paths=train_paths, val_paths=val_paths,
+                         ema_state=ema.state_dict() if ema is not None else None)
+        print(f"Saved checkpoint: {epoch_ckpt}")
+
+        if scheduler is not None:
+            scheduler.step()
+
+        # --- timing ---
+        now = time.monotonic()
+        epochs_done = epoch + 1 - start_epoch
+        epochs_left = args.epochs - (epoch + 1)
+        epoch_elapsed = now - epoch_start
+        total_elapsed = now - training_start
+        avg_per_epoch = total_elapsed / epochs_done
+        remaining_secs = avg_per_epoch * epochs_left
+
+        def _fmt_duration(secs: float) -> str:
+            secs = int(secs)
+            h, rem = divmod(secs, 3600)
+            m, s = divmod(rem, 60)
+            if h:
+                return f"{h}h {m:02d}m {s:02d}s"
+            if m:
+                return f"{m}m {s:02d}s"
+            return f"{s}s"
+
+        eta_dt = datetime.now() + timedelta(seconds=remaining_secs)
+        eta_str = eta_dt.strftime("%d %b %Y %H:%M")
+        print(
+            f"Epoch time: {_fmt_duration(epoch_elapsed)} | "
+            f"Elapsed: {_fmt_duration(total_elapsed)} | "
+            f"Remaining: {_fmt_duration(remaining_secs)} | "
+            f"ETA: {eta_str}"
+        )
+
+    final_path = output_dir / "final_model.pt"
+    if ema is not None:
+        ema.store(model)
+        ema.copy_to(model)
+        torch.save(model.state_dict(), final_path)
+        ema.restore(model)
+        raw_final_path = output_dir / "final_model_raw.pt"
+        torch.save(model.state_dict(), raw_final_path)
+        print(f"Saved raw non-EMA model: {raw_final_path}")
+    else:
+        torch.save(model.state_dict(), final_path)
+    writer.close()
+    print(f"Training complete. Final model: {final_path}")
+
