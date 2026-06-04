@@ -15,6 +15,17 @@ _MAMBA_AVAILABLE = False
 
 
 def _same_padding_3d(kernel_size: int) -> int:
+    """Return symmetric padding for odd 3D kernels at stride 1.
+
+    Args:
+        kernel_size: Convolution kernel size.
+
+    Returns:
+        The integer padding value that preserves spatial shape for stride-1 convs.
+
+    Raises:
+        ValueError: If ``kernel_size`` is non-positive or even.
+    """
     if kernel_size <= 0 or kernel_size % 2 == 0:
         raise ValueError(f"kernel_size must be a positive odd integer, got {kernel_size}")
     return kernel_size // 2
@@ -24,6 +35,19 @@ def _resolve_stage_kernel_sizes(
     hidden_dims: Tuple[int, ...],
     kernel_sizes: Tuple[int, ...] | None,
 ) -> Tuple[int, ...]:
+    """Resolve per-stage kernel sizes for encoder/decoder refinement blocks.
+
+    Args:
+        hidden_dims: Channel widths defining model stages.
+        kernel_sizes: Optional odd kernel size per stage.
+
+    Returns:
+        A kernel-size tuple with one entry per stage.
+
+    Raises:
+        ValueError: If ``kernel_sizes`` length mismatches ``hidden_dims`` or any
+            kernel value is invalid.
+    """
     if kernel_sizes is None:
         return tuple(3 for _ in hidden_dims)
     if len(kernel_sizes) != len(hidden_dims):
@@ -47,6 +71,15 @@ class ConvNormAct3d(nn.Module):
         stride: int = 1,
         activation: type[nn.Module] = nn.ReLU,
     ):
+        """Initialize a 3D conv-norm-activation block.
+
+        Args:
+            in_channels: Input feature channels.
+            out_channels: Output feature channels.
+            kernel_size: Odd convolution kernel size.
+            stride: Convolution stride.
+            activation: Activation module class.
+        """
         super().__init__()
         padding = _same_padding_3d(kernel_size)
         self.conv = nn.Conv3d(
@@ -61,6 +94,7 @@ class ConvNormAct3d(nn.Module):
         self.act = activation(inplace=True) if activation is nn.ReLU else activation()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply convolution, normalization, and activation."""
         return self.act(self.norm(self.conv(x)))
 
 
@@ -68,6 +102,13 @@ class ResBlock3d(nn.Module):
     """Compatibility residual block used in decoder refinement and tests."""
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 3):
+        """Initialize a two-convolution residual block.
+
+        Args:
+            in_channels: Input feature channels.
+            out_channels: Output feature channels.
+            kernel_size: Odd kernel size used by both convolutions.
+        """
         super().__init__()
         padding = _same_padding_3d(kernel_size)
         self.conv1 = nn.Conv3d(in_channels, out_channels, kernel_size, padding=padding, bias=False)
@@ -78,6 +119,7 @@ class ResBlock3d(nn.Module):
         self.proj = nn.Conv3d(in_channels, out_channels, 1, bias=False) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return residual refinement output with GELU activation."""
         residual = self.proj(x)
         x = self.act(self.norm1(self.conv1(x)))
         x = self.norm2(self.conv2(x))
@@ -90,6 +132,13 @@ class BottleneckV2_3d(nn.Module):
     expansion = 4
 
     def __init__(self, in_channels: int, planes: int, stride: int = 1):
+        """Initialize a 3D ResNetV2 bottleneck block.
+
+        Args:
+            in_channels: Input feature channels.
+            planes: Bottleneck inner-channel width before expansion.
+            stride: Spatial stride for the 3x3 bottleneck convolution.
+        """
         super().__init__()
         out_channels = planes * self.expansion
         self.norm1 = nn.InstanceNorm3d(in_channels, affine=True)
@@ -117,6 +166,7 @@ class BottleneckV2_3d(nn.Module):
             self.shortcut = nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run pre-activation bottleneck transform and residual addition."""
         out = self.act1(self.norm1(x))
         residual = self.shortcut(out if not isinstance(self.shortcut, nn.Identity) else x)
 
@@ -127,7 +177,17 @@ class BottleneckV2_3d(nn.Module):
 
 
 class ResNetV2Stage3d(nn.Module):
+    """A sequence of ResNetV2 bottleneck blocks at one feature scale."""
+
     def __init__(self, in_channels: int, planes: int, num_blocks: int, stride: int):
+        """Initialize one ResNetV2 stage.
+
+        Args:
+            in_channels: Stage input channels.
+            planes: Bottleneck base channels.
+            num_blocks: Number of bottleneck blocks in the stage.
+            stride: Stride used by the first block.
+        """
         super().__init__()
         blocks: list[nn.Module] = [BottleneckV2_3d(in_channels, planes, stride=stride)]
         out_channels = planes * BottleneckV2_3d.expansion
@@ -136,16 +196,28 @@ class ResNetV2Stage3d(nn.Module):
         self.blocks = nn.Sequential(*blocks)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply all bottleneck blocks in this stage."""
         return self.blocks(x)
 
 
 class DecoderUpBlock3d(nn.Module):
+    """Upsample + skip-concat + residual refinement block for decoder path."""
+
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int, kernel_size: int):
+        """Initialize one decoder upsampling block.
+
+        Args:
+            in_channels: Input channels from deeper decoder level.
+            skip_channels: Channels in the matching encoder skip tensor.
+            out_channels: Output channels after upsampling/refinement.
+            kernel_size: Odd kernel size for residual refinement convolutions.
+        """
         super().__init__()
         self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2, bias=False)
         self.refine = ResBlock3d(out_channels + skip_channels, out_channels, kernel_size=kernel_size)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        """Upsample input, align spatially with skip, then fuse and refine."""
         x = self.up(x)
         if x.shape[-3:] != skip.shape[-3:]:
             x = nn.functional.interpolate(x, size=skip.shape[-3:], mode="trilinear", align_corners=False)
@@ -154,6 +226,8 @@ class DecoderUpBlock3d(nn.Module):
 
 @dataclass(frozen=True)
 class EncoderFeatures:
+    """Typed container holding multiscale encoder activations for skip decoding."""
+
     stem: torch.Tensor
     c2: torch.Tensor
     c3: torch.Tensor
@@ -170,6 +244,13 @@ class ResNet50V2Encoder3d(nn.Module):
         base_planes: Tuple[int, int, int, int],
         kernel_sizes: Tuple[int, ...],
     ):
+        """Initialize a 3D ResNet50V2-style encoder backbone.
+
+        Args:
+            in_channels: Input data channels.
+            base_planes: Four stage base widths.
+            kernel_sizes: Per-stage kernel schedule used for compatibility metadata.
+        """
         super().__init__()
         p1, p2, p3, p4 = base_planes
 
@@ -198,6 +279,15 @@ class ResNet50V2Encoder3d(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, use_checkpoint: bool) -> EncoderFeatures:
+        """Encode an input volume and return multiscale feature maps.
+
+        Args:
+            x: Input tensor of shape ``(B, C, D, H, W)``.
+            use_checkpoint: Whether to apply gradient checkpointing in residual stages.
+
+        Returns:
+            EncoderFeatures with stem, c2, c3, c4, and c5 tensors.
+        """
         ckpt = use_checkpoint and torch.is_grad_enabled()
 
         stem = self.stem_act(self.stem_norm(self.stem_conv(x)))
@@ -231,6 +321,17 @@ class SeismicUNet3d(nn.Module):
         use_checkpoint: bool = True,
         deep_reconstruction_head: bool = False,
     ):
+        """Initialize the seismic reconstruction network.
+
+        Args:
+            input_channels: Number of input/output seismic channels.
+            hidden_dims: Four encoder stage widths.
+            kernel_sizes: Optional odd kernel schedule for refinement blocks.
+            spatial_size: Intended patch size; retained for compatibility.
+            use_mamba: Compatibility flag; ignored in this pure ResNetV2 variant.
+            use_checkpoint: Enable stage-level gradient checkpointing.
+            deep_reconstruction_head: Use a 2-layer head instead of a single 1x1x1 conv.
+        """
         super().__init__()
         if use_mamba:
             print("WARNING: use_mamba is ignored in this architecture; using pure 3D ResNetV2-UNet blocks.")
@@ -278,6 +379,7 @@ class SeismicUNet3d(nn.Module):
         self._head_type = self.HEAD_RECONSTRUCTION
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict reconstructed seismic amplitudes at full input resolution."""
         feats = self.encoder(x, use_checkpoint=self.use_checkpoint)
 
         y = self.dec4(feats.c5, feats.c4)
@@ -291,6 +393,12 @@ class SeismicUNet3d(nn.Module):
         return self.head(y).float()
 
     def swap_to_segmentation_head(self, n_classes: int = 1, freeze_body: bool = True) -> None:
+        """Replace the reconstruction head with a segmentation-style logits head.
+
+        Args:
+            n_classes: Number of segmentation output channels.
+            freeze_body: If True, freeze encoder/decoder weights after swap.
+        """
         if isinstance(self.head, nn.Sequential):
             first = self.head[0]
             if not isinstance(first, nn.Conv3d):
@@ -312,6 +420,7 @@ class SeismicUNet3d(nn.Module):
                 p.requires_grad = False
 
     def unfreeze_body(self) -> None:
+        """Unfreeze encoder/decoder parameters for full fine-tuning."""
         for p in (
             list(self.encoder.parameters())
             + list(self.dec4.parameters())
@@ -324,10 +433,12 @@ class SeismicUNet3d(nn.Module):
 
     @property
     def head_type(self) -> str:
+        """Return active head mode: reconstruction or segmentation."""
         return self._head_type
 
     @property
     def mamba_available(self) -> bool:
+        """Report whether optional Mamba acceleration is available."""
         return _MAMBA_AVAILABLE
 
 
@@ -342,6 +453,18 @@ def create_model(
     deep_reconstruction_head: bool = False,
     **kwargs,
 ) -> SeismicUNet3d:
+    """Factory for SeismicUNet3d with compatibility-friendly arguments.
+
+    Args:
+        use_mamba: Compatibility flag accepted by training CLI.
+        use_checkpoint: Enable gradient checkpointing in the encoder.
+        kernel_sizes: Optional odd kernel schedule for refinement blocks.
+        deep_reconstruction_head: Enable a deeper regression output head.
+        **kwargs: Forwarded to SeismicUNet3d.
+
+    Returns:
+        An initialized SeismicUNet3d instance.
+    """
     return SeismicUNet3d(
         use_mamba=use_mamba,
         use_checkpoint=use_checkpoint,

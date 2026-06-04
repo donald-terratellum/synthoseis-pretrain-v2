@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary: VAE Online Export Phase B/C/D + CLI Integration (2026-06-04)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 900px; line-height: 1.55; color: #1f2937; }
+    h1, h2 { color: #111827; }
+    code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul, ol { margin-top: 0.4rem; }
+    .meta { color: #4b5563; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: VAE Online Export Phase B/C/D + CLI Integration (2026-06-04)</h1>
+
+  <h2>Context and Goals</h2>
+  <p>This session implemented the VAE export workflow so VAE training zarrs can be generated from Synthoseis outputs during dataset generation runs. The primary goals were to convert the plan to an execution runbook, implement Phase B, integrate Phase C in <code>generate_datasets.sh</code>, and complete Phase D validation.</p>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Converted plan content to a step-by-step runbook and added a Phase A interface contract note.</li>
+    <li>Implemented <code>src/synthoseis_pre_train/vae_export.py</code> with CLI/API, default radius behavior, geologic-score-driven selection, and zarr output <code>patches</code> shaped <code>(N, X, Y, Z)</code>.</li>
+    <li>Added <code>tests/test_vae_export.py</code> coverage for radius defaults, naming, axis/shape contract, dataset-id inference, and CLI default-output behavior.</li>
+    <li>Integrated Phase C flags and per-run exporter invocation in <code>generate_datasets.sh</code> with validation, logging, and fail-fast handling.</li>
+    <li>Validated with shell syntax checks, pytest, and a smoke compatibility load via VAE <code>ZarrPatchDataset</code>.</li>
+  </ul>
+
+  <h2>How Was It Done</h2>
+  <ul>
+    <li>Mapped lifecycle boundaries and schema expectations across <code>generate_datasets.sh</code>, synthoseis <code>main.py</code>, and VAE scripts.</li>
+    <li>Implemented exporter/tests incrementally and resolved zarr API compatibility details.</li>
+    <li>Added shell integration and reran focused tests after each phase.</li>
+  </ul>
+
+  <h2>When Was It Done and By Whom</h2>
+  <p class="meta">Date: 2026-06-04<br/>Environment: local macOS workspace<br/>Implementer: GitHub Copilot (GPT-5.3-Codex) with user direction and approval</p>
+
+  <h2>Basic Info (Relevant Commits, Files Involved)</h2>
+  <p>Commits in this session were pending at summary creation and executed immediately after summary generation.</p>
+  <ul>
+    <li><code>.github/session-summary-and-commit.prompt.md</code></li>
+    <li><code>generate_datasets.sh</code></li>
+    <li><code>src/synthoseis_pre_train/models.py</code></li>
+    <li><code>src/synthoseis_pre_train/vae_export.py</code></li>
+    <li><code>tests/test_vae_export.py</code></li>
+    <li><code>plans/vae_online_dataset_generation_plan_2026-06-04.md</code></li>
+    <li><code>plans/vae_phase_a_interface_contract_2026-06-04.md</code></li>
+  </ul>
+
+  <h2>Next and/or Future Follow-Up Work Suggestions</h2>
+  <ol>
+    <li>Run one true end-to-end production invocation of <code>generate_datasets.sh --generate-vae-zarr</code> and verify <code>train_XXXX.zarr</code> outputs under <code>/Users/donaldpg/synthoseis-3dvae-poc/data</code>.</li>
+    <li>Add optional non-fatal exporter mode for long unattended runs.</li>
+    <li>Add integration tests around Phase C shell argument parsing.</li>
+    <li>Optionally add exporter scaling attrs if VAE pipeline standardization requires them.</li>
+  </ol>
+</body>
+</html>

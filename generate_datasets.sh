@@ -24,6 +24,12 @@
 #                                 pause 30 minutes when at/above cap (default: 14)
 #   --start-index N               First run index (d4, default: 1; auto-detected from
 #                                 existing _synthoseis_run_NNNN dirs if not set)
+#   --generate-vae-zarr           Export VAE patch zarr after each completed run
+#   --vae-subset-size X,Y,Z       Patch subset size in xyz order (default: 32,32,64)
+#   --vae-radius FLOAT            Distance threshold override for geologic selection
+#   --vae-n-subsets N             Number of patches per dataset (default: 2500)
+#   --vae-output-root PATH        Root output folder for train_XXXX.zarr files
+#                                 (default: /Users/donaldpg/synthoseis-3dvae-poc/data)
 #   --no-replace                  Append-only mode (default): never delete datasets
 #   --replace-oldest              Legacy mode: delete oldest replaceable dataset
 #   -h, --help                    Show this help and exit
@@ -50,6 +56,11 @@ MIN_FREE_GB=50
 RECHECK_SLEEP_SEC=3600
 MAX_NUM_DATASETS=14
 DATASET_CAP_SLEEP_SEC=180
+GENERATE_VAE_ZARR=false
+VAE_SUBSET_SIZE="32,32,64"
+VAE_RADIUS=""
+VAE_N_SUBSETS=2500
+VAE_OUTPUT_ROOT="/Users/donaldpg/synthoseis-3dvae-poc/data"
 
 # ── argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -63,6 +74,11 @@ while [[ $# -gt 0 ]]; do
         --disk-recheck-sec)     RECHECK_SLEEP_SEC="$2";      shift 2 ;;
         --max-num-datasets)     MAX_NUM_DATASETS="$2";       shift 2 ;;
         --start-index)          START_INDEX="$2";            shift 2 ;;
+        --generate-vae-zarr)    GENERATE_VAE_ZARR=true;        shift ;;
+        --vae-subset-size)      VAE_SUBSET_SIZE="$2";         shift 2 ;;
+        --vae-radius)           VAE_RADIUS="$2";              shift 2 ;;
+        --vae-n-subsets)        VAE_N_SUBSETS="$2";           shift 2 ;;
+        --vae-output-root)      VAE_OUTPUT_ROOT="$2";         shift 2 ;;
         --no-replace)           NO_REPLACE=true;              shift ;;
         --replace-oldest)       NO_REPLACE=false;             shift ;;
         -h|--help)
@@ -178,6 +194,24 @@ read_epoch_secs_from_log() {
     parse_epoch_secs "$raw"
 }
 
+# Parse "x,y,z" into three integers and print as "x y z".
+parse_subset_size_xyz() {
+    local raw="$1"
+    local cleaned
+    cleaned=$(echo "$raw" | tr -d '[:space:]')
+    IFS=',' read -r sx sy sz extra <<< "$cleaned"
+    if [[ -z "$sx" || -z "$sy" || -z "$sz" || -n "${extra:-}" ]]; then
+        return 1
+    fi
+    if [[ ! "$sx" =~ ^[0-9]+$ || ! "$sy" =~ ^[0-9]+$ || ! "$sz" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if (( sx <= 0 || sy <= 0 || sz <= 0 )); then
+        return 1
+    fi
+    echo "$sx $sy $sz"
+}
+
 # ── sanity checks ─────────────────────────────────────────────────────────────
 if [[ ! -d "$ZARR_FOLDER" ]]; then
     echo "ERROR: ZARR_FOLDER '$ZARR_FOLDER' does not exist." >&2
@@ -197,6 +231,24 @@ fi
 if [[ ! "$MAX_NUM_DATASETS" =~ ^[0-9]+$ ]] || (( MAX_NUM_DATASETS <= 0 )); then
     echo "ERROR: --max-num-datasets must be a positive integer (got: '$MAX_NUM_DATASETS')." >&2
     exit 1
+fi
+
+if [[ ! "$VAE_N_SUBSETS" =~ ^[0-9]+$ ]] || (( VAE_N_SUBSETS <= 0 )); then
+    echo "ERROR: --vae-n-subsets must be a positive integer (got: '$VAE_N_SUBSETS')." >&2
+    exit 1
+fi
+
+if ! subset_size_xyz=$(parse_subset_size_xyz "$VAE_SUBSET_SIZE"); then
+    echo "ERROR: --vae-subset-size must be 'X,Y,Z' with positive integers (got: '$VAE_SUBSET_SIZE')." >&2
+    exit 1
+fi
+read -r VAE_SUBSET_X VAE_SUBSET_Y VAE_SUBSET_Z <<< "$subset_size_xyz"
+
+if [[ -n "$VAE_RADIUS" ]]; then
+    if [[ ! "$VAE_RADIUS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        echo "ERROR: --vae-radius must be a positive number (got: '$VAE_RADIUS')." >&2
+        exit 1
+    fi
 fi
 
 if [[ ! -f "$SYNTHOSEIS_DIR/main.py" ]]; then
@@ -236,6 +288,17 @@ echo "  Min free space : ${MIN_FREE_GB} GB"
 echo "  Recheck sleep  : $(fmt_duration "$RECHECK_SLEEP_SEC") (${RECHECK_SLEEP_SEC}s)"
 echo "  Max datasets   : ${MAX_NUM_DATASETS} (append-only cap; sleep $(fmt_duration "$DATASET_CAP_SLEEP_SEC") at/above cap)"
 [[ -n "$CHECK_LOG" ]] && echo "  Training log   : $CHECK_LOG"
+echo "  VAE export     : $GENERATE_VAE_ZARR"
+if [[ "$GENERATE_VAE_ZARR" == "true" ]]; then
+    echo "  VAE subset xyz : ${VAE_SUBSET_X},${VAE_SUBSET_Y},${VAE_SUBSET_Z}"
+    if [[ -n "$VAE_RADIUS" ]]; then
+        echo "  VAE radius     : $VAE_RADIUS"
+    else
+        echo "  VAE radius     : default (min(x,y,z)/3)"
+    fi
+    echo "  VAE n_subsets  : $VAE_N_SUBSETS"
+    echo "  VAE output root: $VAE_OUTPUT_ROOT"
+fi
 if [[ "$NO_REPLACE" == "true" ]]; then
     echo "  Mode           : append-only (default)"
 else
@@ -303,6 +366,42 @@ for (( i=0; i<NUM_RUNS; i++ )); do
     fi
 
     echo "New dataset created: $(basename "$new_zarr_dir")"
+
+    # ── 2b. Export VAE zarr for this completed dataset ─────────────────────
+    if [[ "$GENERATE_VAE_ZARR" == "true" ]]; then
+        src_model_zarr="$new_zarr_dir/model_data.zarr"
+        if [[ ! -d "$src_model_zarr" ]]; then
+            echo "ERROR: Expected source model_data.zarr at '$src_model_zarr' for VAE export." >&2
+            exit 1
+        fi
+
+        vae_cmd=(
+            uv run python -m synthoseis_pre_train.vae_export
+            --dataset-zarr "$src_model_zarr"
+            --dataset-id "$run_idx"
+            --subset-size-x "$VAE_SUBSET_X"
+            --subset-size-y "$VAE_SUBSET_Y"
+            --subset-size-z "$VAE_SUBSET_Z"
+            --n-subsets "$VAE_N_SUBSETS"
+            --vae-output-root "$VAE_OUTPUT_ROOT"
+        )
+        if [[ -n "$VAE_RADIUS" ]]; then
+            vae_cmd+=(--radius "$VAE_RADIUS")
+        fi
+
+        echo "VAE export: dataset_id=$(printf '%04d' "$run_idx") src='$src_model_zarr'"
+        echo "  subset_size=${VAE_SUBSET_X},${VAE_SUBSET_Y},${VAE_SUBSET_Z} n_subsets=${VAE_N_SUBSETS} output_root='$VAE_OUTPUT_ROOT'"
+        if [[ -n "$VAE_RADIUS" ]]; then
+            echo "  radius=$VAE_RADIUS"
+        else
+            echo "  radius=default(min(x,y,z)/3)"
+        fi
+
+        if ! "${vae_cmd[@]}"; then
+            echo "ERROR: VAE export failed for run tag '$run_tag'." >&2
+            exit 1
+        fi
+    fi
 
     if [[ "$NO_REPLACE" == "true" ]]; then
         echo "Append-only mode enabled; skipping replacement/deletion step."
