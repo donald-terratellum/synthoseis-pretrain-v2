@@ -10,7 +10,7 @@ horizon segmentation tasks.
 This repository provides:
 - **Masking strategies** for seismic data (peak/trough preservation, trace cluster masking)
 - **Data augmentation** (independent z/xy stretch, phase rotation, time-to-depth simulation)
-- **3-D U-Net model** with residual blocks and skip connections
+- **3-D U-Net model** with residual blocks, skip connections, and resize-convolution decoder upsampling
 - **Dynamic multi-dataset training pipeline** with automatic batch-size calculation and thermal pausing
 
 ## Quick Start

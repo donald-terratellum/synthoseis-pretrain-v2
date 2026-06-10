@@ -201,7 +201,7 @@ class ResNetV2Stage3d(nn.Module):
 
 
 class DecoderUpBlock3d(nn.Module):
-    """Upsample + skip-concat + residual refinement block for decoder path."""
+    """Resize-conv upsample + skip-concat + residual refinement block."""
 
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int, kernel_size: int):
         """Initialize one decoder upsampling block.
@@ -213,14 +213,17 @@ class DecoderUpBlock3d(nn.Module):
             kernel_size: Odd kernel size for residual refinement convolutions.
         """
         super().__init__()
-        self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2, bias=False)
+        # Resize-convolution avoids checkerboard artifacts from transpose conv overlap.
+        self.up_interp = nn.Upsample(scale_factor=2, mode="nearest")
+        self.up_conv = nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False)
         self.refine = ResBlock3d(out_channels + skip_channels, out_channels, kernel_size=kernel_size)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
         """Upsample input, align spatially with skip, then fuse and refine."""
-        x = self.up(x)
+        x = self.up_interp(x)
+        x = self.up_conv(x)
         if x.shape[-3:] != skip.shape[-3:]:
-            x = nn.functional.interpolate(x, size=skip.shape[-3:], mode="trilinear", align_corners=False)
+            x = nn.functional.interpolate(x, size=skip.shape[-3:], mode="nearest")
         return self.refine(torch.cat([x, skip], dim=1))
 
 
@@ -363,7 +366,8 @@ class SeismicUNet3d(nn.Module):
             ]
         )
 
-        self.final_up = nn.ConvTranspose3d(stem_ch, stem_ch, kernel_size=2, stride=2, bias=False)
+        self.final_up_interp = nn.Upsample(scale_factor=2, mode="nearest")
+        self.final_up_conv = nn.Conv3d(stem_ch, stem_ch, kernel_size=1, bias=False)
 
         if deep_reconstruction_head:
             mid_ch = max(1, stem_ch // 2)
@@ -387,9 +391,10 @@ class SeismicUNet3d(nn.Module):
         y = self.dec2(y, feats.c2)
         y = self.dec1(y, feats.stem)
 
-        y = self.final_up(y)
+        y = self.final_up_interp(y)
+        y = self.final_up_conv(y)
         if y.shape[-3:] != x.shape[-3:]:
-            y = nn.functional.interpolate(y, size=x.shape[-3:], mode="trilinear", align_corners=False)
+            y = nn.functional.interpolate(y, size=x.shape[-3:], mode="nearest")
         return self.head(y).float()
 
     def swap_to_segmentation_head(self, n_classes: int = 1, freeze_body: bool = True) -> None:
@@ -415,7 +420,7 @@ class SeismicUNet3d(nn.Module):
                 + list(self.dec3.parameters())
                 + list(self.dec2.parameters())
                 + list(self.dec1.parameters())
-                + list(self.final_up.parameters())
+                + list(self.final_up_conv.parameters())
             ):
                 p.requires_grad = False
 
@@ -427,7 +432,7 @@ class SeismicUNet3d(nn.Module):
             + list(self.dec3.parameters())
             + list(self.dec2.parameters())
             + list(self.dec1.parameters())
-            + list(self.final_up.parameters())
+            + list(self.final_up_conv.parameters())
         ):
             p.requires_grad = True
 

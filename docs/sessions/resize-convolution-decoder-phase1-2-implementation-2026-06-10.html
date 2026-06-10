@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary: Resize-Convolution Decoder Phase 1-2 Implementation (2026-06-10)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 900px; line-height: 1.55; color: #1f2937; }
+    h1, h2 { color: #111827; }
+    code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul, ol { margin-top: 0.4rem; }
+    .meta { color: #4b5563; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: Resize-Convolution Decoder Phase 1-2 Implementation (2026-06-10)</h1>
+
+  <h2>Context and Goals</h2>
+  <p>The session goal was to execute Phase 1 and Phase 2 of the decoder artifact-reduction plan: replace transpose-convolution upsampling with resize-convolution and add unit tests verifying shape and gradient behavior. README updates were included as needed; CLI changes were evaluated.</p>
+
+  <h2>What Was Done</h2>
+  <ol>
+    <li>Refactored decoder upsampling in <code>src/synthoseis_pre_train/models.py</code> from <code>ConvTranspose3d</code> to nearest-neighbor interpolation + <code>Conv3d(1x1x1)</code> in decoder blocks and final upsampling path.</li>
+    <li>Updated freeze/unfreeze body logic for renamed final upsample modules.</li>
+    <li>Added <code>tests/test_decoder_resize_convolution.py</code> for resize-conv composition, output shape alignment, full-model shape, and gradient flow.</li>
+    <li>Updated <code>README.md</code> overview to mention resize-convolution decoder upsampling.</li>
+    <li>Ran targeted tests and confirmed passing results.</li>
+  </ol>
+
+  <h2>How Was It Done</h2>
+  <ul>
+    <li>Reviewed model and test impact points before edits.</li>
+    <li>Applied focused architectural changes in decoder modules.</li>
+    <li>Added dedicated regression tests for the new upsampling pathway.</li>
+    <li>Validated with targeted pytest runs.</li>
+    <li>Confirmed no CLI updates were required because the change is internal architecture behavior.</li>
+  </ul>
+
+  <h2>When Was It Done and By Whom</h2>
+  <p class="meta">Date: 2026-06-10<br/>Environment: /Users/donaldpg/synthoseis-pretrain-v2<br/>Implementer: GitHub Copilot (GPT-5.3-Codex) collaborating with DPG</p>
+
+  <h2>Basic Info (Relevant Commits, Files Involved)</h2>
+  <p>Commit details are recorded after commit/push.</p>
+  <ul>
+    <li><code>README.md</code></li>
+    <li><code>src/synthoseis_pre_train/models.py</code></li>
+    <li><code>tests/test_decoder_resize_convolution.py</code></li>
+    <li><code>docs/sessions/resize-convolution-decoder-phase1-2-implementation-2026-06-10.md</code></li>
+    <li><code>docs/sessions/resize-convolution-decoder-phase1-2-implementation-2026-06-10.html</code></li>
+  </ul>
+
+  <h2>Next and/or Future Follow-Up Work Suggestions</h2>
+  <ol>
+    <li>Run Phase 3 baseline-vs-new training benchmark with controlled seeds and data slices.</li>
+    <li>Add explicit quantitative acceptance thresholds for rollout decisions.</li>
+    <li>Implement optional checkpoint migration if transfer-learning from old checkpoints is needed.</li>
+    <li>Add FFT/visual artifact comparison reporting for Phase 4 validation.</li>
+  </ol>
+</body>
+</html>
