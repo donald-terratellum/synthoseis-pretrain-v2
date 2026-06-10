@@ -40,3 +40,50 @@ def test_main_forwards_normalized_paths(tmp_path: Path, monkeypatch):
     train_cli.main(["--data_paths", str(parent), "--epochs", "1"])
 
     assert captured["args"]["data_paths"] == [str(dataset)]
+
+
+def test_parser_defaults_for_multi_component_and_unet_levels():
+    parser = train_cli._build_parser()
+    args = parser.parse_args(["--data_paths", "dummy.zarr"])
+
+    assert args.loss == "huber"
+    assert args.mc_mse_weight == 0.2
+    assert args.mc_pmse_weight == 0.6
+    assert args.mc_mae_weight == 0.2
+    assert args.mc_lpips_weight == 0.0
+    assert args.mc_lpips_net == "alex"
+    assert args.mc_pmse_eps == 1e-8
+    assert args.unet_levels == 4
+
+
+def test_parser_accepts_multi_component_and_custom_unet_levels():
+    parser = train_cli._build_parser()
+    args = parser.parse_args([
+        "--data_paths",
+        "dummy.zarr",
+        "--loss",
+        "multi_component",
+        "--mc_mse_weight",
+        "0.1",
+        "--mc_pmse_weight",
+        "0.7",
+        "--mc_mae_weight",
+        "0.2",
+        "--mc_lpips_weight",
+        "0.0",
+        "--unet_levels",
+        "5",
+        "--hidden_dims",
+        "16",
+        "32",
+        "64",
+        "128",
+        "256",
+    ])
+
+    assert args.loss == "multi_component"
+    assert args.mc_mse_weight == 0.1
+    assert args.mc_pmse_weight == 0.7
+    assert args.mc_mae_weight == 0.2
+    assert args.unet_levels == 5
+    assert tuple(args.hidden_dims) == (16, 32, 64, 128, 256)

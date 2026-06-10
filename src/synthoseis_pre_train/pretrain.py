@@ -74,6 +74,13 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "stats_mae_weight": 1.0,
     "stats_mse_weight": 1.0,
     "stats_std_ratio_clip": 10.0,
+    "mc_mse_weight": 0.2,
+    "mc_pmse_weight": 0.6,
+    "mc_mae_weight": 0.2,
+    "mc_lpips_weight": 0.0,
+    "mc_lpips_net": "alex",
+    "mc_pmse_eps": 1e-8,
+    "unet_levels": 4,
     "grad_accum_steps": 1,
     "grad_clip_norm": 1.0,
     "ema_decay": 0.999,
@@ -426,6 +433,26 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             )
         if any(k <= 0 or k % 2 == 0 for k in args.kernel_sizes):
             _config_error("--kernel_sizes values must be positive odd integers")
+    if len(tuple(args.hidden_dims)) != int(args.unet_levels):
+        _config_error(
+            "--hidden_dims length must match --unet_levels "
+            f"(got hidden_dims={tuple(args.hidden_dims)}, unet_levels={args.unet_levels})"
+        )
+    encoder_downsample_factor = 2 ** (int(args.unet_levels) + 1)
+    bottleneck_shape = tuple(int(s) // encoder_downsample_factor for s in args.sample_shape)
+    if min(bottleneck_shape) < 2:
+        _config_error(
+            "sample_shape is too small for the requested --unet_levels; "
+            "InstanceNorm requires >1 spatial element at bottleneck. "
+            f"Got sample_shape={tuple(args.sample_shape)}, unet_levels={args.unet_levels}, "
+            f"downsample_factor={encoder_downsample_factor}, bottleneck_shape={bottleneck_shape}."
+        )
+    if min(bottleneck_shape) < 4:
+        print(
+            "WARNING: very small bottleneck spatial size may hurt training stability: "
+            f"sample_shape={tuple(args.sample_shape)}, unet_levels={args.unet_levels}, "
+            f"bottleneck_shape={bottleneck_shape}."
+        )
     if args.ssim_window_size < 3 or args.ssim_window_size % 2 == 0:
         _config_error("--ssim_window_size must be an odd integer >= 3")
     if min(args.sample_shape) < args.ssim_window_size:
@@ -454,6 +481,13 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         _config_error("--mae_smooth_kernel_weights values must be >= 0")
     if sum(float(v) for v in args.mae_smooth_kernel_weights) <= 0:
         _config_error("--mae_smooth_kernel_weights must sum to > 0")
+    if args.loss == "multi_component":
+        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight) < 0:
+            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, and --mc_lpips_weight must be >= 0")
+        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight) <= 0:
+            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, or --mc_lpips_weight must be > 0")
+        if args.mc_pmse_eps <= 0:
+            _config_error("--mc_pmse_eps must be > 0")
 
     if not args.data_paths and not args.data_folder:
         _config_error("At least one of --data_paths or --data_folder must be provided")
@@ -567,10 +601,12 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     else:
         print(f"Kernel schedule: {tuple(args.kernel_sizes)}")
     print(f"Channels schedule: {tuple(args.hidden_dims)}")
+    print(f"U-Net levels: {int(args.unet_levels)}")
     model = create_model(
         use_mamba=args.use_mamba,
         input_channels=1,
         hidden_dims=tuple(args.hidden_dims),
+        unet_levels=int(args.unet_levels),
         kernel_sizes=tuple(args.kernel_sizes) if args.kernel_sizes is not None else None,
         spatial_size=tuple(args.sample_shape),
         deep_reconstruction_head=args.deep_reconstruction_head,

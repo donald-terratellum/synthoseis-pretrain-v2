@@ -214,6 +214,103 @@ Additional `train_cli.py` options:
 | `--ema_decay` | `0.999` | EMA decay (`<=0` disables EMA) |
 | `--ema_update_every` | `1` | EMA update cadence in optimizer steps |
 
+### Loss Modes
+
+Current `--loss` choices in `train_cli.py`:
+
+- `mse`
+- `mae`
+- `mae_smooth`
+- `huber` (default)
+- `ssim`
+- `sliding_stats`
+- `smae`
+- `multi_component`
+
+#### Multi-component loss
+
+Use `--loss multi_component` to blend reconstruction terms:
+
+- `--mc_mse_weight` (default `0.2`)
+- `--mc_pmse_weight` (default `0.6`)
+- `--mc_mae_weight` (default `0.2`)
+- `--mc_lpips_weight` (default `0.0`)
+- `--mc_lpips_net` (`alex|vgg|squeeze`, default `alex`)
+- `--mc_pmse_eps` (default `1e-8`)
+
+Example:
+
+```bash
+uv run python train_cli.py \
+  --data_paths /path/to/seismic.zarr \
+  --loss multi_component \
+  --mc_mse_weight 0.2 \
+  --mc_pmse_weight 0.6 \
+  --mc_mae_weight 0.2 \
+  --mc_lpips_weight 0.0 \
+  --mc_lpips_net alex \
+  --mc_pmse_eps 1e-8 \
+  --epochs 100
+```
+
+LPIPS is optional. If `lpips` is not installed and `--mc_lpips_weight > 0`,
+training logs a warning and treats the LPIPS term as zero.
+
+Environment note:
+- `lpips` is not required by default in a fresh environment.
+- In this workspace, `lpips` is installed in the uv-managed environment.
+
+### U-Net Levels
+
+Depth is configurable with `--unet_levels` (range `3..6`, default `4`).
+
+`--hidden_dims` must contain exactly one value per level.
+
+Examples:
+
+```bash
+# 3-level model
+uv run python train_cli.py \
+  --data_paths /path/to/seismic.zarr \
+  --unet_levels 3 \
+  --hidden_dims 16 32 64
+
+# 5-level model
+uv run python train_cli.py \
+  --data_paths /path/to/seismic.zarr \
+  --unet_levels 5 \
+  --hidden_dims 8 16 32 64 128
+```
+
+Note: deeper levels require larger `--sample_shape` to keep bottleneck spatial
+size valid for normalization layers.
+
+Minimum practical `--sample_shape` guidance per `--unet_levels`:
+
+| `--unet_levels` | Effective encoder downsample factor | Minimum practical per-axis `sample_shape` |
+|---|---|---|
+| `3` | `2^(3+1)=16` | `32` (recommended `64+`) |
+| `4` | `2^(4+1)=32` | `64` (recommended `96+`) |
+| `5` | `2^(5+1)=64` | `128` |
+| `6` | `2^(6+1)=128` | `256` |
+
+These thresholds align with runtime checks that require bottleneck spatial size
+of at least `2` voxels per axis.
+
+### Common Config Errors
+
+1. `--hidden_dims` length does not match `--unet_levels`.
+2. `--sample_shape` too small for chosen `--unet_levels` (bottleneck becomes invalid).
+3. `--loss multi_component` with all `--mc_*_weight` values set to `0`.
+4. Negative `--mc_*_weight` values or non-positive `--mc_pmse_eps`.
+5. `--mc_lpips_weight > 0` without `lpips` installed in the active environment.
+
+Quick check command:
+
+```bash
+uv run python train_cli.py --help
+```
+
 ### Recommended presets
 
 Use these presets with `train_multi_datasets.sh` as a starting point, then tune from there.

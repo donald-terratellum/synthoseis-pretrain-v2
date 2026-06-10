@@ -5,7 +5,13 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from synthoseis_pre_train.losses import MAESmoothLoss3D, SSIMHybridLoss3D, SlidingWindowStatsLoss3D, SMAELoss
+from synthoseis_pre_train.losses import (
+    MAESmoothLoss3D,
+    MultiComponentLoss3D,
+    SMAELoss,
+    SSIMHybridLoss3D,
+    SlidingWindowStatsLoss3D,
+)
 
 
 class _ScaledL1Loss(nn.Module):
@@ -57,6 +63,15 @@ def _build_criterion(args) -> nn.Module:
         )
     if loss_fn == "smae":
         return SMAELoss()
+    if loss_fn == "multi_component":
+        return MultiComponentLoss3D(
+            mse_weight=float(getattr(args, "mc_mse_weight", 0.2)),
+            pmse_weight=float(getattr(args, "mc_pmse_weight", 0.6)),
+            mae_weight=float(getattr(args, "mc_mae_weight", 0.2)),
+            lpips_weight=float(getattr(args, "mc_lpips_weight", 0.0)),
+            lpips_net=str(getattr(args, "mc_lpips_net", "alex")),
+            pmse_eps=float(getattr(args, "mc_pmse_eps", 1e-8)),
+        )
     raise ValueError(f"Unknown loss function: {loss_fn!r}")
 
 
@@ -113,6 +128,8 @@ def _print_loss_and_backprop_summary(
         _loss_desc = "ssim-hybrid"
     elif _loss_name == "sliding_stats":
         _loss_desc = "sliding-window-stats"
+    elif _loss_name == "multi_component":
+        _loss_desc = "multi-component"
     else:
         _loss_desc = _loss_name
     _kv("loss", f"{_loss_desc} ({_src('loss')}, default={defaults['loss']})")
@@ -144,6 +161,21 @@ def _print_loss_and_backprop_summary(
         print(
             f"{' ':4}{' ':<{label_width}}     "
             f"(mean={_mw:g}, std={_sw:g}, min={_minw:g}, max={_maxw:g}, mae={_maew:g}, mse={_msew:g})"
+        )
+    if _loss_name == "multi_component":
+        _mse = float(getattr(args, "mc_mse_weight", 0.2))
+        _pmse = float(getattr(args, "mc_pmse_weight", 0.6))
+        _mae = float(getattr(args, "mc_mae_weight", 0.2))
+        _lpips = float(getattr(args, "mc_lpips_weight", 0.0))
+        _lpips_net = str(getattr(args, "mc_lpips_net", "alex"))
+        _pmse_eps = float(getattr(args, "mc_pmse_eps", 1e-8))
+        print(
+            f"{' ':4}{' ':<{label_width}}   - "
+            f"weights(mse={_mse:g}, pmse={_pmse:g}, mae={_mae:g}, lpips={_lpips:g})"
+        )
+        print(
+            f"{' ':4}{' ':<{label_width}}     "
+            f"(lpips_net={_lpips_net}, pmse_eps={_pmse_eps:g})"
         )
     _kv("AMP", f"{'on' if amp_enabled else 'off'} (auto)")
     _kv(

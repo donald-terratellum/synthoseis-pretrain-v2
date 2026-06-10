@@ -1,5 +1,7 @@
 """Regression checks for kernel-size scheduling defaults."""
 
+import torch
+
 from synthoseis_pre_train.models import ResBlock3d, create_model
 
 
@@ -37,3 +39,35 @@ def test_custom_schedule_changes_shallow_kernels_but_not_bottleneck():
     assert model.decoder.dec_blocks[0].conv1.kernel_size == (3, 3, 3)
     assert model.decoder.dec_blocks[1].conv1.kernel_size == (5, 5, 5)
     assert model.decoder.dec_blocks[2].conv1.kernel_size == (7, 7, 7)
+
+
+def test_model_initializes_for_unet_levels_3_to_6():
+    configs = [
+        (3, (16, 32, 64)),
+        (4, (16, 32, 64, 128)),
+        (5, (8, 16, 32, 64, 128)),
+        (6, (8, 16, 32, 64, 128, 256)),
+    ]
+
+    for levels, hidden_dims in configs:
+        model = create_model(use_checkpoint=False, unet_levels=levels, hidden_dims=hidden_dims)
+        assert model.unet_levels == levels
+        assert len(model.dec_blocks) == levels
+
+
+def test_model_forward_for_unet_levels_3_to_5():
+    # Keep this forward test lightweight; level 6 requires a very large spatial
+    # input to keep bottleneck normalization valid.
+    configs = [
+        (3, (16, 32, 64), (64, 64, 64)),
+        (4, (16, 32, 64, 128), (64, 64, 64)),
+        (5, (8, 16, 32, 64, 128), (128, 128, 128)),
+    ]
+
+    for levels, hidden_dims, shape in configs:
+        model = create_model(use_checkpoint=False, unet_levels=levels, hidden_dims=hidden_dims)
+        model.eval()
+        x = torch.randn(1, 1, *shape)
+        with torch.no_grad():
+            y = model(x)
+        assert tuple(y.shape) == (1, 1, *shape)

@@ -3,9 +3,17 @@
 
 from __future__ import annotations
 
+import importlib
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+try:
+    _lpips_lib = importlib.import_module("lpips")
+except Exception:
+    _lpips_lib = None
 
 
 class SMAELoss(nn.Module):
@@ -361,3 +369,134 @@ class SlidingWindowStatsLoss3D(nn.Module):
             + self.mae_weight * l_mae
             + self.mse_weight * l_mse
         )
+
+
+def compute_pmse_loss(recon: torch.Tensor, target: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """Compute percent-MSE (PMSE) with per-sample energy normalization.
+
+    PMSE is defined as per-sample MSE divided by per-sample target energy
+    (mean square), then averaged across the batch.
+    """
+    if recon.shape != target.shape:
+        raise ValueError("recon and target must have identical shape")
+    if recon.ndim < 2:
+        raise ValueError("expected batched tensors with shape [B, ...]")
+    if eps <= 0:
+        raise ValueError("eps must be > 0")
+
+    mse = F.mse_loss(recon, target, reduction="none")
+    reduce_dims = tuple(range(1, mse.ndim))
+    mse_per_sample = mse.mean(dim=reduce_dims)
+    target_energy = (target * target).mean(dim=reduce_dims).clamp_min(float(eps))
+    return (mse_per_sample / target_energy).mean()
+
+
+class LPIPSLoss(nn.Module):
+    """Optional LPIPS wrapper with graceful fallback when lpips is unavailable."""
+
+    def __init__(self, enabled: bool = False, net: str = "alex") -> None:
+        super().__init__()
+        self.enabled = bool(enabled)
+        self.net = str(net)
+        self.network: nn.Module | None = None
+
+        if not self.enabled:
+            return
+
+        if _lpips_lib is None:
+            print("WARNING: lpips package not installed; LPIPS term will be treated as zero.")
+            self.enabled = False
+            return
+
+        try:
+            self.network = _lpips_lib.LPIPS(net=self.net, verbose=False)
+        except Exception as exc:
+            print(f"WARNING: failed to initialize LPIPS(net={self.net}): {exc}. LPIPS term will be treated as zero.")
+            self.network = None
+            self.enabled = False
+
+    @staticmethod
+    def _to_lpips_image(x: torch.Tensor) -> torch.Tensor:
+        """Convert [B,C,D,H,W] or [B,C,H,W] seismic tensors to LPIPS-ready image tensors.
+
+        LPIPS expects 4D images in approximately [-1, 1] with 3 channels.
+        """
+        if x.ndim == 5:
+            # Use the middle depth slice for a stable, deterministic 2D proxy.
+            x = x[:, :, x.shape[2] // 2, :, :]
+        if x.ndim != 4:
+            raise ValueError("LPIPS expects input shape [B,C,H,W] or [B,C,D,H,W]")
+
+        x = torch.clamp(x / 10.0, -1.0, 1.0)
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
+        elif x.shape[1] > 3:
+            x = x[:, :3, :, :]
+        return x
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        if x.shape != y.shape:
+            raise ValueError("x and y must have identical shape")
+        if not self.enabled or self.network is None:
+            return x.new_zeros(())
+
+        x_img = self._to_lpips_image(x)
+        y_img = self._to_lpips_image(y)
+        dist = self.network(x_img, y_img)
+        return dist.mean()
+
+
+class MultiComponentLoss3D(nn.Module):
+    """Weighted composite loss for seismic reconstruction.
+
+    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS
+    """
+
+    def __init__(
+        self,
+        mse_weight: float = 0.2,
+        pmse_weight: float = 0.6,
+        mae_weight: float = 0.2,
+        lpips_weight: float = 0.0,
+        lpips_net: str = "alex",
+        pmse_eps: float = 1e-8,
+    ) -> None:
+        super().__init__()
+
+        for name, value in (
+            ("mse_weight", mse_weight),
+            ("pmse_weight", pmse_weight),
+            ("mae_weight", mae_weight),
+            ("lpips_weight", lpips_weight),
+        ):
+            if value < 0:
+                raise ValueError(f"{name} must be >= 0")
+        if float(pmse_eps) <= 0:
+            raise ValueError("pmse_eps must be > 0")
+        if float(mse_weight + pmse_weight + mae_weight + lpips_weight) <= 0.0:
+            raise ValueError("at least one multi-component loss weight must be > 0")
+
+        self.mse_weight = float(mse_weight)
+        self.pmse_weight = float(pmse_weight)
+        self.mae_weight = float(mae_weight)
+        self.lpips_weight = float(lpips_weight)
+        self.pmse_eps = float(pmse_eps)
+
+        self.lpips_loss = LPIPSLoss(enabled=self.lpips_weight > 0.0, net=lpips_net)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        if pred.shape != target.shape:
+            raise ValueError("pred and target must have identical shape")
+
+        total = pred.new_zeros(())
+
+        if self.mse_weight > 0.0:
+            total = total + self.mse_weight * F.mse_loss(pred, target)
+        if self.pmse_weight > 0.0:
+            total = total + self.pmse_weight * compute_pmse_loss(pred, target, eps=self.pmse_eps)
+        if self.mae_weight > 0.0:
+            total = total + self.mae_weight * F.l1_loss(pred, target)
+        if self.lpips_weight > 0.0:
+            total = total + self.lpips_weight * self.lpips_loss(pred, target)
+
+        return total

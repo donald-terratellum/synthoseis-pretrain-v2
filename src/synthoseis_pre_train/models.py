@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import List, Tuple, cast
 
@@ -227,45 +226,45 @@ class DecoderUpBlock3d(nn.Module):
         return self.refine(torch.cat([x, skip], dim=1))
 
 
-@dataclass(frozen=True)
-class EncoderFeatures:
-    """Typed container holding multiscale encoder activations for skip decoding."""
-
-    stem: torch.Tensor
-    c2: torch.Tensor
-    c3: torch.Tensor
-    c4: torch.Tensor
-    c5: torch.Tensor
-
-
 class ResNet50V2Encoder3d(nn.Module):
     """3D ResNet50V2-style encoder with (3,4,6,3) bottleneck depths."""
 
     def __init__(
         self,
         in_channels: int,
-        base_planes: Tuple[int, int, int, int],
+        base_planes: Tuple[int, ...],
         kernel_sizes: Tuple[int, ...],
     ):
         """Initialize a 3D ResNet50V2-style encoder backbone.
 
         Args:
             in_channels: Input data channels.
-            base_planes: Four stage base widths.
+            base_planes: Stage base widths (one per level).
             kernel_sizes: Per-stage kernel schedule used for compatibility metadata.
         """
         super().__init__()
-        p1, p2, p3, p4 = base_planes
+        if len(base_planes) < 3:
+            raise ValueError("base_planes must have at least 3 entries")
+
+        p1 = base_planes[0]
 
         self.stem_conv = nn.Conv3d(in_channels, p1, kernel_size=7, stride=2, padding=3, bias=False)
         self.stem_norm = nn.InstanceNorm3d(p1, affine=True)
         self.stem_act = nn.ReLU(inplace=True)
         self.stem_pool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
 
-        self.stage1 = ResNetV2Stage3d(p1, p1, num_blocks=3, stride=1)
-        self.stage2 = ResNetV2Stage3d(p1 * 4, p2, num_blocks=4, stride=2)
-        self.stage3 = ResNetV2Stage3d(p2 * 4, p3, num_blocks=6, stride=2)
-        self.stage4 = ResNetV2Stage3d(p3 * 4, p4, num_blocks=3, stride=2)
+        # Canonical ResNet50V2 depths for first four stages, then repeat 3 blocks.
+        block_schedule = [3, 4, 6, 3] + [3] * max(0, len(base_planes) - 4)
+        stages: list[nn.Module] = []
+        for i, planes in enumerate(base_planes):
+            if i == 0:
+                stage_in = p1
+                stride = 1
+            else:
+                stage_in = base_planes[i - 1] * BottleneckV2_3d.expansion
+                stride = 2
+            stages.append(ResNetV2Stage3d(stage_in, planes, num_blocks=block_schedule[i], stride=stride))
+        self.stages = nn.ModuleList(stages)
 
         # Compatibility surface for existing kernel regression tests.
         self.stem = SimpleNamespace(
@@ -281,26 +280,27 @@ class ResNet50V2Encoder3d(nn.Module):
             conv2=SimpleNamespace(kernel_size=(3, 3, 3)),
         )
 
-    def forward(self, x: torch.Tensor, use_checkpoint: bool) -> EncoderFeatures:
-        """Encode an input volume and return multiscale feature maps.
+    def forward(self, x: torch.Tensor, use_checkpoint: bool) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """Encode an input volume and return stem + multiscale feature maps.
 
         Args:
             x: Input tensor of shape ``(B, C, D, H, W)``.
             use_checkpoint: Whether to apply gradient checkpointing in residual stages.
 
         Returns:
-            EncoderFeatures with stem, c2, c3, c4, and c5 tensors.
+            Tuple of (stem, stage_features), where stage_features is ordered
+            shallow-to-deep.
         """
         ckpt = use_checkpoint and torch.is_grad_enabled()
 
         stem = self.stem_act(self.stem_norm(self.stem_conv(x)))
         x = self.stem_pool(stem)
 
-        c2 = cast(torch.Tensor, _grad_ckpt(self.stage1, x, use_reentrant=False)) if ckpt else self.stage1(x)
-        c3 = cast(torch.Tensor, _grad_ckpt(self.stage2, c2, use_reentrant=False)) if ckpt else self.stage2(c2)
-        c4 = cast(torch.Tensor, _grad_ckpt(self.stage3, c3, use_reentrant=False)) if ckpt else self.stage3(c3)
-        c5 = cast(torch.Tensor, _grad_ckpt(self.stage4, c4, use_reentrant=False)) if ckpt else self.stage4(c4)
-        return EncoderFeatures(stem=stem, c2=c2, c3=c3, c4=c4, c5=c5)
+        features: list[torch.Tensor] = []
+        for stage in self.stages:
+            x = cast(torch.Tensor, _grad_ckpt(stage, x, use_reentrant=False)) if ckpt else stage(x)
+            features.append(x)
+        return stem, features
 
 
 class SeismicUNet3d(nn.Module):
@@ -319,6 +319,7 @@ class SeismicUNet3d(nn.Module):
         input_channels: int = 1,
         hidden_dims: Tuple[int, ...] = (32, 64, 128, 256),
         kernel_sizes: Tuple[int, ...] | None = None,
+        unet_levels: int = 4,
         spatial_size: Tuple[int, int, int] = (128, 128, 128),
         use_mamba: bool = False,
         use_checkpoint: bool = True,
@@ -328,8 +329,9 @@ class SeismicUNet3d(nn.Module):
 
         Args:
             input_channels: Number of input/output seismic channels.
-            hidden_dims: Four encoder stage widths.
+            hidden_dims: Encoder stage widths (must match unet_levels).
             kernel_sizes: Optional odd kernel schedule for refinement blocks.
+            unet_levels: Number of encoder/decoder levels.
             spatial_size: Intended patch size; retained for compatibility.
             use_mamba: Compatibility flag; ignored in this pure ResNetV2 variant.
             use_checkpoint: Enable stage-level gradient checkpointing.
@@ -338,31 +340,54 @@ class SeismicUNet3d(nn.Module):
         super().__init__()
         if use_mamba:
             print("WARNING: use_mamba is ignored in this architecture; using pure 3D ResNetV2-UNet blocks.")
-        if len(hidden_dims) != 4:
-            raise ValueError("hidden_dims must have 4 entries for ResNet50V2 stages, e.g. (32, 64, 128, 256)")
+        if unet_levels < 3 or unet_levels > 6:
+            raise ValueError("unet_levels must be between 3 and 6")
+        if len(hidden_dims) != unet_levels:
+            raise ValueError(
+                "hidden_dims length must match unet_levels "
+                f"(got len(hidden_dims)={len(hidden_dims)}, unet_levels={unet_levels})"
+            )
 
         self._stage_kernels = _resolve_stage_kernel_sizes(hidden_dims, kernel_sizes)
         self.use_checkpoint = use_checkpoint
+        self.unet_levels = int(unet_levels)
 
         self.encoder = ResNet50V2Encoder3d(input_channels, hidden_dims, self._stage_kernels)
-
-        c2_ch = hidden_dims[0] * 4
-        c3_ch = hidden_dims[1] * 4
-        c4_ch = hidden_dims[2] * 4
-        c5_ch = hidden_dims[3] * 4
         stem_ch = hidden_dims[0]
 
-        self.dec4 = DecoderUpBlock3d(c5_ch, c4_ch, c4_ch, kernel_size=self._stage_kernels[2])
-        self.dec3 = DecoderUpBlock3d(c4_ch, c3_ch, c3_ch, kernel_size=self._stage_kernels[1])
-        self.dec2 = DecoderUpBlock3d(c3_ch, c2_ch, c2_ch, kernel_size=self._stage_kernels[0])
-        self.dec1 = DecoderUpBlock3d(c2_ch, stem_ch, stem_ch, kernel_size=self._stage_kernels[0])
+        enc_out_channels = [h * BottleneckV2_3d.expansion for h in hidden_dims]
+        dec_blocks: list[DecoderUpBlock3d] = []
+
+        # Decoder blocks from deepest stage toward stem.
+        for i in range(self.unet_levels - 1, 0, -1):
+            dec_blocks.append(
+                DecoderUpBlock3d(
+                    in_channels=enc_out_channels[i],
+                    skip_channels=enc_out_channels[i - 1],
+                    out_channels=enc_out_channels[i - 1],
+                    kernel_size=self._stage_kernels[i - 1],
+                )
+            )
+        dec_blocks.append(
+            DecoderUpBlock3d(
+                in_channels=enc_out_channels[0],
+                skip_channels=stem_ch,
+                out_channels=stem_ch,
+                kernel_size=self._stage_kernels[0],
+            )
+        )
+        self.dec_blocks = nn.ModuleList(dec_blocks)
+
+        # Backward-compatible named decoder blocks (e.g., dec4..dec1 for 4-level default).
+        for i, block in enumerate(self.dec_blocks):
+            level_name = self.unet_levels - i
+            setattr(self, f"dec{level_name}", block)
 
         # Compatibility surface for existing decoder kernel regression tests.
         self.decoder = SimpleNamespace(
             dec_blocks=[
-                SimpleNamespace(conv1=SimpleNamespace(kernel_size=(self._stage_kernels[2],) * 3)),
-                SimpleNamespace(conv1=SimpleNamespace(kernel_size=(self._stage_kernels[1],) * 3)),
-                SimpleNamespace(conv1=SimpleNamespace(kernel_size=(self._stage_kernels[0],) * 3)),
+                SimpleNamespace(conv1=SimpleNamespace(kernel_size=(self._stage_kernels[i],) * 3))
+                for i in range(self.unet_levels - 2, -1, -1)
             ]
         )
 
@@ -384,12 +409,12 @@ class SeismicUNet3d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Predict reconstructed seismic amplitudes at full input resolution."""
-        feats = self.encoder(x, use_checkpoint=self.use_checkpoint)
+        stem, stage_feats = self.encoder(x, use_checkpoint=self.use_checkpoint)
 
-        y = self.dec4(feats.c5, feats.c4)
-        y = self.dec3(y, feats.c3)
-        y = self.dec2(y, feats.c2)
-        y = self.dec1(y, feats.stem)
+        y = stage_feats[-1]
+        skips = list(reversed(stage_feats[:-1])) + [stem]
+        for block, skip in zip(self.dec_blocks, skips):
+            y = block(y, skip)
 
         y = self.final_up_interp(y)
         y = self.final_up_conv(y)
@@ -416,10 +441,7 @@ class SeismicUNet3d(nn.Module):
         if freeze_body:
             for p in (
                 list(self.encoder.parameters())
-                + list(self.dec4.parameters())
-                + list(self.dec3.parameters())
-                + list(self.dec2.parameters())
-                + list(self.dec1.parameters())
+                + list(self.dec_blocks.parameters())
                 + list(self.final_up_conv.parameters())
             ):
                 p.requires_grad = False
@@ -428,10 +450,7 @@ class SeismicUNet3d(nn.Module):
         """Unfreeze encoder/decoder parameters for full fine-tuning."""
         for p in (
             list(self.encoder.parameters())
-            + list(self.dec4.parameters())
-            + list(self.dec3.parameters())
-            + list(self.dec2.parameters())
-            + list(self.dec1.parameters())
+            + list(self.dec_blocks.parameters())
             + list(self.final_up_conv.parameters())
         ):
             p.requires_grad = True

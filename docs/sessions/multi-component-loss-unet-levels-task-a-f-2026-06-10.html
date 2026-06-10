@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary: Multi-Component Loss + U-Net Levels (Task A-F)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 2rem auto; max-width: 920px; line-height: 1.5; padding: 0 1rem; }
+    h1, h2, h3 { line-height: 1.2; }
+    code { background: #f4f4f4; padding: 0.1rem 0.25rem; border-radius: 4px; }
+    ul { margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: Multi-Component Loss + U-Net Levels (Task A-F)</h1>
+
+  <h2>Context and Goals</h2>
+  <p>
+    This session implemented the revised execution plan for adding a new multi-component reconstruction loss
+    and configurable U-Net depth in the seismic pretraining pipeline.
+  </p>
+  <ul>
+    <li>add CLI and configuration wiring for <code>multi_component</code> loss mode and weights</li>
+    <li>implement PMSE and optional LPIPS loss components</li>
+    <li>integrate the new loss through the criterion factory</li>
+    <li>make model depth configurable via <code>--unet_levels</code></li>
+    <li>add focused tests and update documentation</li>
+    <li>install LPIPS in the uv-managed Python environment</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Added CLI support for <code>--loss multi_component</code> and all <code>--mc_*</code> arguments.</li>
+    <li>Added <code>--unet_levels</code> (3-6, default 4).</li>
+    <li>Implemented <code>compute_pmse_loss</code>, <code>LPIPSLoss</code>, and <code>MultiComponentLoss3D</code>.</li>
+    <li>Integrated <code>multi_component</code> in the criterion factory.</li>
+    <li>Added runtime validation for multi-component args and U-Net shape/level compatibility.</li>
+    <li>Refactored model to dynamic encoder/decoder levels with backward-compatible default behavior.</li>
+    <li>Added/extended tests for loss components, parser options, and dynamic model depth.</li>
+    <li>Updated README with loss-mode docs, usage examples, U-Net guidance, and common config errors.</li>
+    <li>Installed <code>lpips</code> in the uv environment and verified import.</li>
+  </ul>
+
+  <h2>How It Was Done</h2>
+  <ol>
+    <li>Task A: CLI/parser and summary/default mapping.</li>
+    <li>Task B: loss primitives in central losses module.</li>
+    <li>Task C: criterion wiring and validation checks.</li>
+    <li>Task D: dynamic-level model refactor and startup safety checks.</li>
+    <li>Task E: focused tests and regression execution.</li>
+    <li>Task F: README documentation update.</li>
+    <li>Installed optional LPIPS dependency via uv and validated availability.</li>
+  </ol>
+
+  <h2>When and By Whom</h2>
+  <ul>
+    <li>Date: 2026-06-10</li>
+    <li>Author: GitHub Copilot (GPT-5.3-Codex) with user-directed scope and validation checkpoints</li>
+  </ul>
+
+  <h2>Basic Info</h2>
+  <h3>Relevant commit(s)</h3>
+  <ul>
+    <li>Single session commit on branch <code>feature/multi-loss-and-unet-levels</code> (hash reported in session output)</li>
+  </ul>
+
+  <h3>Files involved</h3>
+  <ul>
+    <li><code>train_cli.py</code></li>
+    <li><code>src/synthoseis_pre_train/losses.py</code></li>
+    <li><code>src/synthoseis_pre_train/_criterion.py</code></li>
+    <li><code>src/synthoseis_pre_train/models.py</code></li>
+    <li><code>src/synthoseis_pre_train/pretrain.py</code></li>
+    <li><code>tests/test_loss_components.py</code></li>
+    <li><code>tests/test_train_cli.py</code></li>
+    <li><code>tests/test_model_kernel_defaults.py</code></li>
+    <li><code>README.md</code></li>
+    <li><code>pyproject.toml</code></li>
+    <li><code>docs/sessions/multi-component-loss-unet-levels-task-a-f-2026-06-10.md</code></li>
+    <li><code>docs/sessions/multi-component-loss-unet-levels-task-a-f-2026-06-10.html</code></li>
+  </ul>
+
+  <h2>Next / Future Follow-Up Suggestions</h2>
+  <ul>
+    <li>Add CI integration checks that execute one short train step with <code>--loss multi_component</code>.</li>
+    <li>Optionally add <code>--upsample_mode</code> (<code>nearest|trilinear</code>) for decoder experiments.</li>
+    <li>Add a checkpoint compatibility/conversion utility for changing <code>unet_levels</code>.</li>
+    <li>Add a compact benchmark report comparing reconstruction quality and stability across levels 3-6.</li>
+  </ul>
+</body>
+</html>

@@ -148,10 +148,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--loss",
         type=str,
         default="huber",
-        choices=["mse", "mae", "mae_smooth", "huber", "ssim", "sliding_stats", "smae"],
+        choices=["mse", "mae", "mae_smooth", "huber", "ssim", "sliding_stats", "smae", "multi_component"],
         help=(
             "Loss function: mse (MSELoss), mae (L1Loss), mae_smooth (smoothed L1), huber (SmoothL1Loss), "
-            "ssim (w1*(1-SSIM)+w2*MSE+w3*L1), sliding_stats (local moments/extrema), or smae (Smooth MAE, e*tanh(e/2), arXiv:2303.09935) "
+            "ssim (w1*(1-SSIM)+w2*MSE+w3*L1), sliding_stats (local moments/extrema), "
+            "smae (Smooth MAE, e*tanh(e/2), arXiv:2303.09935), or multi_component (weighted MSE+PMSE+MAE+optional LPIPS) "
             "over 3D volumes (default: huber)"
         ),
     )
@@ -214,6 +215,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stats_mae_weight", type=float, default=1.0, help="Weight for voxelwise MAE term in sliding_stats")
     parser.add_argument("--stats_mse_weight", type=float, default=1.0, help="Weight for voxelwise MSE term in sliding_stats")
     parser.add_argument("--stats_std_ratio_clip", type=float, default=10.0, help="Clipping bound for local std-ratio in sliding_stats (default: 10.0)")
+    parser.add_argument("--mc_mse_weight", type=float, default=0.2,
+                       help="Weight for MSE term in --loss=multi_component (default: 0.2)")
+    parser.add_argument("--mc_pmse_weight", type=float, default=0.6,
+                       help="Weight for PMSE term in --loss=multi_component (default: 0.6)")
+    parser.add_argument("--mc_mae_weight", type=float, default=0.2,
+                       help="Weight for MAE term in --loss=multi_component (default: 0.2)")
+    parser.add_argument("--mc_lpips_weight", type=float, default=0.0,
+                       help="Weight for LPIPS term in --loss=multi_component (default: 0.0)")
+    parser.add_argument("--mc_lpips_net", type=str, default="alex",
+                       choices=["alex", "vgg", "squeeze"],
+                       help="LPIPS backbone for --loss=multi_component (default: alex)")
+    parser.add_argument("--mc_pmse_eps", type=float, default=1e-8,
+                       help="Epsilon clamp for PMSE denominator in --loss=multi_component (default: 1e-8)")
     parser.add_argument("--ema_decay", type=float, default=0.999,
                        help="EMA decay for model weights; set <=0 to disable")
     parser.add_argument("--ema_update_every", type=int, default=1,
@@ -227,8 +241,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[32, 64, 128, 256],
         help=(
             "Channel widths per encoder stage (e.g. --hidden_dims 32 64 128 256). "
-            "Number of values determines U-Net depth. Default: 32 64 128 256."
+            "Number of values must match --unet_levels. Default: 32 64 128 256."
         ),
+    )
+    parser.add_argument(
+        "--unet_levels",
+        type=int,
+        default=4,
+        choices=range(3, 7),
+        help="Number of encoder/decoder levels for SeismicUNet3d (default: 4, range: 3-6).",
     )
     parser.add_argument(
         "--kernel_sizes",
@@ -289,6 +310,13 @@ def main(argv: list[str] | None = None) -> None:
         "stats_mae_weight": parser.get_default("stats_mae_weight"),
         "stats_mse_weight": parser.get_default("stats_mse_weight"),
         "stats_std_ratio_clip": parser.get_default("stats_std_ratio_clip"),
+        "mc_mse_weight": parser.get_default("mc_mse_weight"),
+        "mc_pmse_weight": parser.get_default("mc_pmse_weight"),
+        "mc_mae_weight": parser.get_default("mc_mae_weight"),
+        "mc_lpips_weight": parser.get_default("mc_lpips_weight"),
+        "mc_lpips_net": parser.get_default("mc_lpips_net"),
+        "mc_pmse_eps": parser.get_default("mc_pmse_eps"),
+        "unet_levels": parser.get_default("unet_levels"),
         "grad_accum_steps": parser.get_default("grad_accum_steps"),
         "grad_clip_norm": parser.get_default("grad_clip_norm"),
         "ema_decay": parser.get_default("ema_decay"),
