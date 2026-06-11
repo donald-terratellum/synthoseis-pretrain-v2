@@ -442,6 +442,12 @@ class LPIPSLoss(nn.Module):
 
         x_img = self._to_lpips_image(x)
         y_img = self._to_lpips_image(y)
+        
+        # Ensure images are on the same device as the LPIPS network
+        device = next(self.network.parameters()).device
+        x_img = x_img.to(device)
+        y_img = y_img.to(device)
+        
         dist = self.network(x_img, y_img)
         return dist.mean()
 
