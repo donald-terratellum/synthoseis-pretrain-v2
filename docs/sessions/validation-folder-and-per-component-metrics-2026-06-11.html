@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Session Summary: Validation Folder and Per-Component Metrics — 2026-06-11</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #1a1a1a; line-height: 1.6; }
+    h1 { border-bottom: 2px solid #333; padding-bottom: 8px; }
+    h2 { border-bottom: 1px solid #ccc; margin-top: 36px; }
+    h3 { margin-top: 24px; color: #333; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+    pre { background: #f4f4f4; padding: 14px; border-radius: 5px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+    th { background: #f0f0f0; }
+    .meta { color: #666; font-size: 0.95em; margin-bottom: 28px; }
+    .tag { display: inline-block; background: #e0edff; color: #1a4fa0; border-radius: 4px; padding: 2px 8px; font-size: 0.85em; margin-right: 6px; }
+  </style>
+</head>
+<body>
+
+<h1>Session Summary: Validation Folder and Per-Component Metrics</h1>
+<p class="meta">
+  <strong>Date:</strong> 2026-06-11 &nbsp;|&nbsp;
+  <strong>Branch:</strong> <code>feature/multi-loss-and-unet-levels</code> &nbsp;|&nbsp;
+  <span class="tag">training</span>
+  <span class="tag">metrics</span>
+  <span class="tag">validation</span>
+  <span class="tag">LPIPS</span>
+</p>
+
+<h2>Context and Goals</h2>
+<p>
+  The seismic pre-training codebase (<code>synthoseis-pretrain-v2</code>) runs a 3D UNet that reconstructs seismic volumes from synthoseis-generated Zarr datasets. Prior to this session, validation datasets were drawn from the same pool as training datasets using a ratio-based split (<code>--val_split_ratio</code>). Two improvements were requested:
+</p>
+<ol>
+  <li>
+    <strong>Dedicated validation folder:</strong> When a <code>validation/</code> subfolder exists inside <code>--data_folder</code>, use those datasets exclusively for validation (with fallback to the original split-based approach when absent). The training folder should still be pruned; the validation subfolder should never be pruned.
+  </li>
+  <li>
+    <strong>Per-component loss reporting:</strong> Compute and print MSE, PMSE, MAE/L1, and LPIPS individually at the end of each epoch for both train and validation, and append a summary row to a shared CSV every 5 epochs at a fixed path so all runs contribute to the same file.
+  </li>
+</ol>
+<p>A follow-up adjustment scaled the LPIPS metric by 1.5× to align its magnitude with the other loss components.</p>
+
+<h2>What Was Done</h2>
+
+<h3>1. Dedicated <code>validation/</code> subfolder support</h3>
+<p>At startup, the code detects whether <code>{data_folder}/validation/</code> exists. When present, training discovery runs on the parent folder (excluding the validation subtree), and validation discovery runs on the subfolder. At each epoch rescan, <strong>only the training folder is pruned</strong> using <code>split_target_train</code> as the keep-count. The validation subfolder is never pruned. The ratio-based split fallback is fully preserved when no validation subfolder exists.</p>
+<p><strong>Bug fixed:</strong> The initial implementation accidentally placed the pruning call inside the <code>else</code> branch, meaning pruning was silently skipped when a validation subfolder was active. The fix moves <code>_prune_oldest_to_target</code> into the <code>use_separate_validation_folder</code> branch operating on the filtered <code>discovered_train</code> list.</p>
+
+<h3>2. Per-component metric helpers</h3>
+<table>
+  <thead><tr><th>Function</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>_new_component_metric_totals()</code></td><td>Initialize accumulator dict (count, mse, pmse, mae, lpips)</td></tr>
+    <tr><td><code>_update_component_metric_totals()</code></td><td>Accumulate batch-size-weighted component metrics per batch</td></tr>
+    <tr><td><code>_finalize_component_metrics()</code></td><td>Normalize accumulated totals to per-sample averages</td></tr>
+    <tr><td><code>_append_component_metrics_csv_row()</code></td><td>Append one row to the shared metrics CSV</td></tr>
+  </tbody>
+</table>
+
+<h3>3. <code>train_epoch()</code> updated</h3>
+<p>Added <code>reporting_lpips</code> parameter and <code>component_totals</code> accumulator updated inside <code>torch.no_grad()</code> after each batch. <code>return_details=True</code> now includes <code>mse</code>, <code>pmse</code>, <code>mae</code>, <code>lpips</code> keys. Both the single-pass and multi-chunk code paths accumulate and weight-average component metrics correctly.</p>
+
+<h3>4. <code>validate()</code> updated</h3>
+<p>Added <code>return_details</code> and <code>reporting_lpips</code> parameters. Returns a <code>dict</code> with <code>loss</code>, <code>mse</code>, <code>pmse</code>, <code>mae</code>, <code>lpips</code> when <code>return_details=True</code>. Empty-loaders early-return also returns the full dict with <code>nan</code> values.</p>
+
+<h3>5. <code>_run_validation_dataset()</code> updated</h3>
+<p>Added <code>metric_updater: Callable[[Tensor, Tensor], None] | None</code> parameter, called after each forward pass (outside the criterion) to capture per-component stats without affecting the training loss.</p>
+
+<h3>6. LPIPS 1.5× scaling</h3>
+<p><code>LPIPSLoss</code> gained a <code>scale: float = 1.5</code> parameter (default). <code>forward()</code> returns <code>dist.mean() * self.scale</code>. Applies to both training backprop (when <code>mc_lpips_weight &gt; 0</code>) and reporting metrics.</p>
+
+<h3>7. CSV logging</h3>
+<p>Columns: date, time, tensorboard folder, epoch, unet_levels, hidden_dims, kernel_schedule, model parameter count (millions, 2 d.p.), mse_weight, pmse_weight, mae_weight, lpips_weight, train/val mse/pmse/mae/LPIPS.</p>
+<ul>
+  <li>Path: <code>/Users/donaldpg/synthoseis-pretrain-v2/checkpoints/epoch_component_metrics.csv</code></li>
+  <li>Cadence: every 5 epochs</li>
+  <li>Header written only on first creation; subsequent runs append safely</li>
+</ul>
+
+<h3>8. Stdout reporting</h3>
+<p>At the end of every epoch, two new lines are printed:</p>
+<pre><code>Component Metrics | train(mse=..., pmse=..., mae=..., lpips=...)
+Component Metrics | val(mse=..., pmse=..., mae=..., lpips=...)</code></pre>
+
+<h2>How It Was Done</h2>
+<p>All changes were made directly to the Python source files using targeted string-replace edits with no new source files created. Static analysis (<code>get_errors</code>) and targeted pytest suites were run after each substantive change. 11 tests passed throughout the session.</p>
+<p><strong>Test suite:</strong> <code>tests/test_train_epoch_smoke.py</code>, <code>tests/test_loss_components.py</code>, <code>tests/test_train_cli.py</code> — all 11 passed.</p>
+
+<h2>When and By Whom</h2>
+<ul>
+  <li><strong>Date:</strong> June 11, 2026</li>
+  <li><strong>Author:</strong> GitHub Copilot (Claude Sonnet 4.6), directed by Donald P. Griffith</li>
+  <li><strong>Branch:</strong> <code>feature/multi-loss-and-unet-levels</code></li>
+</ul>
+
+<h2>Basic Info</h2>
+
+<h3>Files Modified</h3>
+<table>
+  <thead><tr><th>File</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td><code>src/synthoseis_pre_train/pretrain.py</code></td><td>+336 lines net: validation folder logic, metric helpers, CSV append, epoch reporting, LPIPS reporter init</td></tr>
+    <tr><td><code>src/synthoseis_pre_train/_validation_loop.py</code></td><td>+5 lines: <code>metric_updater</code> callback in <code>_run_validation_dataset</code></td></tr>
+    <tr><td><code>src/synthoseis_pre_train/losses.py</code></td><td>+5 lines net: <code>scale</code> parameter on <code>LPIPSLoss</code>, applied in <code>forward()</code></td></tr>
+  </tbody>
+</table>
+
+<h3>CSV Output Location</h3>
+<p><code>/Users/donaldpg/synthoseis-pretrain-v2/checkpoints/epoch_component_metrics.csv</code></p>
+
+<h2>Next / Future Follow-Up Work</h2>
+<ul>
+  <li><strong>TensorBoard scalars for component metrics:</strong> Log <code>metrics/train_mse</code>, <code>metrics/train_pmse</code> etc. alongside the existing <code>loss/train</code> scalar for visual tracking.</li>
+  <li><strong>Configurable LPIPS scale:</strong> Expose <code>--reporting_lpips_scale</code> CLI flag if further tuning is needed.</li>
+  <li><strong>Configurable CSV cadence:</strong> Consider a <code>--csv_every_n_epochs</code> CLI flag (currently hardcoded at 5).</li>
+  <li><strong>Validation subfolder: symlink support:</strong> Test whether <code>Path.is_relative_to()</code> correctly excludes symlinked validation folders on macOS in all edge cases.</li>
+  <li><strong>Unit tests for validation folder fallback:</strong> Add a test covering the <code>use_separate_validation_folder=True</code> code path with a real temporary directory structure.</li>
+  <li><strong>Unit tests for CSV append:</strong> Add a test that exercises <code>_append_component_metrics_csv_row</code> and validates column count and header-only-once behavior.</li>
+</ul>
+
+</body>
+</html>

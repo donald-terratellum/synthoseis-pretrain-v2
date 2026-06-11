@@ -394,10 +394,11 @@ def compute_pmse_loss(recon: torch.Tensor, target: torch.Tensor, eps: float = 1e
 class LPIPSLoss(nn.Module):
     """Optional LPIPS wrapper with graceful fallback when lpips is unavailable."""
 
-    def __init__(self, enabled: bool = False, net: str = "alex") -> None:
+    def __init__(self, enabled: bool = False, net: str = "alex", scale: float = 1.5) -> None:
         super().__init__()
         self.enabled = bool(enabled)
         self.net = str(net)
+        self.scale = float(scale)
         self.network: nn.Module | None = None
 
         if not self.enabled:
@@ -449,7 +450,7 @@ class LPIPSLoss(nn.Module):
         y_img = y_img.to(device)
         
         dist = self.network(x_img, y_img)
-        return dist.mean()
+        return dist.mean() * self.scale
 
 
 class MultiComponentLoss3D(nn.Module):

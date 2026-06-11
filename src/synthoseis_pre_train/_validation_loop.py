@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -63,6 +64,7 @@ def _run_validation_dataset(
     window_start: float,
     ds_name: str,
     thermal_guard: ThermalGuard | None = None,
+    metric_updater: Callable[[torch.Tensor, torch.Tensor], None] | None = None,
 ) -> ValidationDatasetRunResult:
     """Run validation batches for one dataset loader."""
     first_input = None
@@ -86,6 +88,9 @@ def _run_validation_dataset(
             with autocast_context(device):
                 output = model(input_data)
                 loss = criterion(output, target)
+
+            if metric_updater is not None:
+                metric_updater(output.detach(), target.detach())
 
             if thermal_guard is not None:
                 thermal_guard.sample_temperature(batch_idx)

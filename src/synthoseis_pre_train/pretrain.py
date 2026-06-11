@@ -8,11 +8,13 @@ import random
 import time
 import math
 import platform
+import csv
 
 from datetime import datetime, timedelta
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 
 import numpy as np
 from pathlib import Path
@@ -53,6 +55,7 @@ from synthoseis_pre_train._validation_loop import _prepare_validation_dataset, _
 from synthoseis_pre_train._train_progress import _log_train_progress_and_maybe_checkpoint
 from synthoseis_pre_train._train_batch_fetch import _fetch_train_batch
 from synthoseis_pre_train._train_step import _maybe_apply_optimizer_step
+from synthoseis_pre_train.losses import LPIPSLoss, compute_pmse_loss
 
 
 DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
@@ -86,6 +89,118 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "ema_decay": 0.999,
     "ema_update_every": 1,
 }
+
+
+_COMPONENT_METRIC_CSV_HEADERS = [
+    "date",
+    "time",
+    "tensorboard folder",
+    "epoch",
+    "unet_levels",
+    "hidden_dims (as a space-delimited string)",
+    "kernel_schedule (as a space-delimited string)",
+    "model parameter count (in millions, for example 11,324,033 is shown as 11.32)",
+    "mse_weight",
+    "pmse_weight",
+    "mae_weight",
+    "lpips_weight",
+    "train mse",
+    "train pmse",
+    "train mae/L1",
+    "train LPIPS",
+    "validation mse",
+    "validation pmse",
+    "validation mae/L1",
+    "validation LPIPS",
+]
+
+
+def _new_component_metric_totals() -> dict[str, float]:
+    return {
+        "count": 0.0,
+        "mse": 0.0,
+        "pmse": 0.0,
+        "mae": 0.0,
+        "lpips": 0.0,
+    }
+
+
+def _update_component_metric_totals(
+    totals: dict[str, float],
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    lpips_metric: nn.Module | None,
+) -> None:
+    batch_size = float(pred.shape[0]) if pred.ndim > 0 else 1.0
+    mse = float(F.mse_loss(pred, target).item())
+    pmse = float(compute_pmse_loss(pred, target).item())
+    mae = float(F.l1_loss(pred, target).item())
+    lpips = float(lpips_metric(pred, target).item()) if lpips_metric is not None else 0.0
+
+    totals["count"] += batch_size
+    totals["mse"] += mse * batch_size
+    totals["pmse"] += pmse * batch_size
+    totals["mae"] += mae * batch_size
+    totals["lpips"] += lpips * batch_size
+
+
+def _finalize_component_metrics(totals: dict[str, float]) -> dict[str, float]:
+    count = max(totals.get("count", 0.0), 1.0)
+    return {
+        "mse": totals.get("mse", 0.0) / count,
+        "pmse": totals.get("pmse", 0.0) / count,
+        "mae": totals.get("mae", 0.0) / count,
+        "lpips": totals.get("lpips", 0.0) / count,
+    }
+
+
+def _append_component_metrics_csv_row(
+    csv_path: Path,
+    tb_log_dir: Path,
+    epoch: int,
+    args,
+    n_params: int,
+    train_metrics: dict[str, float],
+    val_metrics: dict[str, float],
+) -> None:
+    now = datetime.now()
+    hidden_dims_str = " ".join(str(int(v)) for v in tuple(args.hidden_dims))
+    if args.kernel_sizes is None:
+        kernel_schedule_vals = [3] * len(tuple(args.hidden_dims))
+    else:
+        kernel_schedule_vals = [int(v) for v in tuple(args.kernel_sizes)]
+    kernel_schedule_str = " ".join(str(v) for v in kernel_schedule_vals)
+
+    row = [
+        now.strftime("%Y-%m-%d"),
+        now.strftime("%H:%M:%S"),
+        str(tb_log_dir),
+        str(int(epoch)),
+        str(int(args.unet_levels)),
+        hidden_dims_str,
+        kernel_schedule_str,
+        f"{(float(n_params) / 1_000_000.0):.2f}",
+        f"{float(getattr(args, 'mc_mse_weight', 0.0)):.6f}",
+        f"{float(getattr(args, 'mc_pmse_weight', 0.0)):.6f}",
+        f"{float(getattr(args, 'mc_mae_weight', 0.0)):.6f}",
+        f"{float(getattr(args, 'mc_lpips_weight', 0.0)):.6f}",
+        f"{float(train_metrics.get('mse', float('nan'))):.8f}",
+        f"{float(train_metrics.get('pmse', float('nan'))):.8f}",
+        f"{float(train_metrics.get('mae', float('nan'))):.8f}",
+        f"{float(train_metrics.get('lpips', float('nan'))):.8f}",
+        f"{float(val_metrics.get('mse', float('nan'))):.8f}",
+        f"{float(val_metrics.get('pmse', float('nan'))):.8f}",
+        f"{float(val_metrics.get('mae', float('nan'))):.8f}",
+        f"{float(val_metrics.get('lpips', float('nan'))):.8f}",
+    ]
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not csv_path.exists()
+    with csv_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(_COMPONENT_METRIC_CSV_HEADERS)
+        writer.writerow(row)
 
 
 def run_training(config: dict[str, Any]) -> None:
@@ -142,6 +257,7 @@ def train_epoch(
     ema_update_every: int = 1,
     max_batches: int | None = None,
     return_details: bool = False,
+    reporting_lpips: nn.Module | None = None,
 ) -> float | dict[str, float | int | bool]:
     """
     Train for one epoch using a single merged train DataLoader.
@@ -163,6 +279,7 @@ def train_epoch(
     last_input = None
     last_output = None
     last_target = None
+    component_totals = _new_component_metric_totals()
 
     try:
         natural_batches = len(train_loader)
@@ -177,6 +294,10 @@ def train_epoch(
                 "loss": avg_loss,
                 "batches_processed": 0,
                 "reload_requested": False,
+                "mse": float("nan"),
+                "pmse": float("nan"),
+                "mae": float("nan"),
+                "lpips": float("nan"),
             }
         return avg_loss
 
@@ -250,6 +371,14 @@ def train_epoch(
                 ema_state=ema.state_dict() if ema is not None else None,
             )
 
+        with torch.no_grad():
+            _update_component_metric_totals(
+                component_totals,
+                output.detach(),
+                target.detach(),
+                reporting_lpips,
+            )
+
         total_loss += batch_loss
         total_batches += 1
 
@@ -301,11 +430,16 @@ def train_epoch(
         )
 
     avg_loss = total_loss / max(total_batches, 1)
+    component_metrics = _finalize_component_metrics(component_totals)
     if return_details:
         return {
             "loss": avg_loss,
             "batches_processed": total_batches,
             "reload_requested": reload_requested,
+            "mse": component_metrics["mse"],
+            "pmse": component_metrics["pmse"],
+            "mae": component_metrics["mae"],
+            "lpips": component_metrics["lpips"],
         }
     return avg_loss
 
@@ -319,7 +453,9 @@ def validate(
     epoch: int = 0,
     thermal_guard: ThermalGuard | None = None,
     max_batches: int | None = None,
-) -> float:
+    return_details: bool = False,
+    reporting_lpips: nn.Module | None = None,
+) -> float | dict[str, float]:
     """
     Validate the model across all validation datasets.
 
@@ -328,11 +464,20 @@ def validate(
     select tag prefixes to toggle between input/output for each slice direction.
     """
     if not val_loaders:
+        if return_details:
+            return {
+                "loss": float("nan"),
+                "mse": float("nan"),
+                "pmse": float("nan"),
+                "mae": float("nan"),
+                "lpips": float("nan"),
+            }
         return float('nan')
 
     model.eval()
     total_loss = 0.0
     total_batches = 0
+    component_totals = _new_component_metric_totals()
     val_start = time.monotonic()
     window_start = val_start
     per_loader_targets = _compute_per_loader_targets(max_batches, len(val_loaders))
@@ -359,6 +504,14 @@ def validate(
                 window_start=window_start,
                 ds_name=ds_name,
                 thermal_guard=thermal_guard,
+                metric_updater=(
+                    lambda pred, target: _update_component_metric_totals(
+                        component_totals,
+                        pred,
+                        target,
+                        reporting_lpips,
+                    )
+                ),
             )
             ds_loss = ds_result.ds_loss
             ds_batches = ds_result.ds_batches
@@ -389,7 +542,17 @@ def validate(
                     avg_ds_loss,
                 )
 
-    return total_loss / max(total_batches, 1)
+    avg_loss = total_loss / max(total_batches, 1)
+    if return_details:
+        metrics = _finalize_component_metrics(component_totals)
+        return {
+            "loss": float(avg_loss),
+            "mse": float(metrics["mse"]),
+            "pmse": float(metrics["pmse"]),
+            "mae": float(metrics["mae"]),
+            "lpips": float(metrics["lpips"]),
+        }
+    return avg_loss
 
 
 DEFAULT_ARRAY_KEYS = [
@@ -504,11 +667,27 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         torch.set_float32_matmul_precision("high")
 
     # --- Dataset split (done once; restored from checkpoint on resume) ---
+    validation_subfolder = Path(args.data_folder) / "validation" if args.data_folder else None
+    use_separate_validation_folder = bool(validation_subfolder is not None and validation_subfolder.is_dir())
+    if args.data_folder:
+        if use_separate_validation_folder:
+            print(f"Validation dataset source: {validation_subfolder} (dedicated validation subfolder)")
+        else:
+            print(f"Validation dataset source: {args.data_folder} (fallback: no validation subfolder found)")
+
     # Build initial path list: explicit --data_paths + discover from --data_folder
     all_paths = list(dict.fromkeys(args.data_paths))  # deduplicate preserving order
     discovered_at_start: list[str] = []
+    val_discovered_at_start: list[str] = []
     if args.data_folder:
         discovered_at_start = _discover_zarr_paths(args.data_folder, args.dataset_glob)
+        if use_separate_validation_folder and validation_subfolder is not None:
+            val_root = validation_subfolder.resolve()
+            discovered_at_start = [
+                p for p in discovered_at_start
+                if not Path(p).resolve().is_relative_to(val_root)
+            ]
+            val_discovered_at_start = _discover_zarr_paths(str(validation_subfolder), args.dataset_glob)
         known = set(all_paths)
         all_paths = all_paths + [p for p in discovered_at_start if p not in known]
 
@@ -521,11 +700,34 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         saved_val_paths   = _peek.get("val_paths")
         del _peek
 
-    initial_num_train, initial_num_val = _resolve_target_counts(
-        len(all_paths), args.val_split_ratio
-    )
+    if use_separate_validation_folder:
+        initial_num_train = len(all_paths)
+        initial_num_val = len(val_discovered_at_start)
+    else:
+        initial_num_train, initial_num_val = _resolve_target_counts(
+            len(all_paths), args.val_split_ratio
+        )
 
-    if saved_train_paths is not None and saved_val_paths is not None:
+    if use_separate_validation_folder:
+        train_paths = list(all_paths)
+        val_paths = list(val_discovered_at_start)
+
+        if saved_train_paths is not None:
+            supplied_train = set(all_paths)
+            kept_train = list(dict.fromkeys(p for p in saved_train_paths if p in supplied_train))
+            new_train = [p for p in all_paths if p not in set(kept_train)]
+            train_paths = kept_train + new_train
+
+        if saved_val_paths is not None:
+            supplied_val = set(val_discovered_at_start)
+            kept_val = list(dict.fromkeys(p for p in saved_val_paths if p in supplied_val))
+            new_val = [p for p in val_discovered_at_start if p not in set(kept_val)]
+            val_paths = kept_val + new_val
+
+        split_target_train = len(train_paths)
+        split_target_val = len(val_paths)
+        print(f"Initialized split with dedicated validation folder: {len(train_paths)} train, {len(val_paths)} val datasets.")
+    elif saved_train_paths is not None and saved_val_paths is not None:
         supplied = set(all_paths)
 
         # Drop paths that no longer exist in the supplied list; deduplicate in case
@@ -580,9 +782,15 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         split_target_train = initial_num_train
         split_target_val = initial_num_val
 
-    _dset_startup = set(discovered_at_start) if args.data_folder else set(all_paths)
-    _at = _active_paths(train_paths, split_target_train, _dset_startup)
-    _av = _active_paths(val_paths,   split_target_val,   _dset_startup)
+    if use_separate_validation_folder:
+        _train_startup = set(discovered_at_start) if args.data_folder else set(all_paths)
+        _val_startup = set(val_discovered_at_start)
+        _at = _active_paths(train_paths, split_target_train, _train_startup)
+        _av = _active_paths(val_paths, split_target_val, _val_startup)
+    else:
+        _dset_startup = set(discovered_at_start) if args.data_folder else set(all_paths)
+        _at = _active_paths(train_paths, split_target_train, _dset_startup)
+        _av = _active_paths(val_paths,   split_target_val,   _dset_startup)
     print(
         f"Dataset split ({split_target_train} train, {split_target_val} val target): "
         f"{len(_at)} train, {len(_av)} val"
@@ -723,6 +931,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     criterion = _build_criterion(args)
     scaler = create_grad_scaler(device)
     ema = ModelEMA(model, args.ema_decay) if args.ema_decay > 0 else None
+    reporting_lpips = LPIPSLoss(enabled=True, net=str(getattr(args, "mc_lpips_net", "alex"))).to(device)
+    reporting_lpips.eval()
+    for p in reporting_lpips.parameters():
+        p.requires_grad_(False)
     _print_loss_and_backprop_summary(args, cli_provided, backprop_defaults, scaler)
     thermal_guard = ThermalGuard(
         max_c=args.thermal_max_c,
@@ -782,27 +994,57 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         current_lr = optimizer.param_groups[0]["lr"]
         epoch_stamp = datetime.now().strftime("%Y-%-m-%-d %H:%M:%S")
         print(f"\nEpoch {epoch + 1}/{args.epochs} | LR: {current_lr:.3e} | {epoch_stamp}")
+        _dset: set[str] = set()
+        _dset_train: set[str] = set()
+        _dset_val: set[str] = set()
 
         # Re-scan once per epoch, prune oldest on disk to fixed target count,
         # then keep the active train/val set fixed until next epoch.
         if args.data_folder:
             discovered = _discover_zarr_paths(args.data_folder, args.dataset_glob)
-            keep_total = split_target_train + split_target_val
-            discovered = _prune_oldest_to_target(
-                args.data_folder,
-                args.dataset_glob,
-                discovered,
-                keep_total,
-            )
-            train_paths, val_paths = _update_split(
-                discovered, train_paths, val_paths, split_target_train, split_target_val
-            )
-            _dset = set(discovered)
+            if use_separate_validation_folder and validation_subfolder is not None:
+                val_root = validation_subfolder.resolve()
+                discovered_train = [
+                    p for p in discovered
+                    if not Path(p).resolve().is_relative_to(val_root)
+                ]
+                # Prune only the training folder; the validation subfolder is
+                # managed externally and never pruned.
+                discovered_train = _prune_oldest_to_target(
+                    args.data_folder,
+                    args.dataset_glob,
+                    discovered_train,
+                    split_target_train,
+                )
+                discovered_val = _discover_zarr_paths(str(validation_subfolder), args.dataset_glob)
+
+                known_train = set(train_paths)
+                train_paths = train_paths + [p for p in discovered_train if p not in known_train]
+                known_val = set(val_paths)
+                val_paths = val_paths + [p for p in discovered_val if p not in known_val]
+                _dset_train = set(discovered_train)
+                _dset_val = set(discovered_val)
+            else:
+                keep_total = split_target_train + split_target_val
+                discovered = _prune_oldest_to_target(
+                    args.data_folder,
+                    args.dataset_glob,
+                    discovered,
+                    keep_total,
+                )
+                train_paths, val_paths = _update_split(
+                    discovered, train_paths, val_paths, split_target_train, split_target_val
+                )
+                _dset = set(discovered)
         else:
             _dset = {p for p in (train_paths + val_paths) if Path(p).parent.exists()}
 
-        active_train = _active_paths(train_paths, split_target_train, _dset)
-        active_val   = _active_paths(val_paths,   split_target_val,   _dset)
+        if args.data_folder and use_separate_validation_folder:
+            active_train = _active_paths(train_paths, split_target_train, _dset_train)
+            active_val = _active_paths(val_paths, split_target_val, _dset_val)
+        else:
+            active_train = _active_paths(train_paths, split_target_train, _dset)
+            active_val   = _active_paths(val_paths,   split_target_val,   _dset)
         print(f"Dataset split ({split_target_train} train, {split_target_val} val target): "
               f"{len(active_train)} train, {len(active_val)} val")
         print(f"  Train: {[Path(p).parent.name for p in active_train]}")
@@ -823,7 +1065,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 print("  WARNING: No usable training datasets this epoch; skipping.")
                 continue
 
-            train_loss = cast(float, train_epoch(
+            train_details = train_epoch(
                 model, train_loader, optimizer, criterion, device,
                 scaler=scaler, writer=writer, epoch=epoch, output_dir=output_dir,
                 train_paths=train_paths, val_paths=val_paths,
@@ -832,11 +1074,26 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 grad_clip_norm=args.grad_clip_norm,
                 ema=ema,
                 ema_update_every=args.ema_update_every,
-            ))
+                return_details=True,
+                reporting_lpips=reporting_lpips,
+            )
+            if not isinstance(train_details, dict):
+                raise RuntimeError("train_epoch(return_details=True) returned non-dict details")
+            train_loss = float(train_details["loss"])
+            train_metrics = {
+                "mse": float(train_details["mse"]),
+                "pmse": float(train_details["pmse"]),
+                "mae": float(train_details["mae"]),
+                "lpips": float(train_details["lpips"]),
+            }
         else:
             target_batches = max(1, int(args.train_batches_per_epoch))
             batches_done = 0
             weighted_loss_sum = 0.0
+            weighted_mse_sum = 0.0
+            weighted_pmse_sum = 0.0
+            weighted_mae_sum = 0.0
+            weighted_lpips_sum = 0.0
             pending_chunk_reload = False
 
             while batches_done < target_batches:
@@ -869,6 +1126,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                     ema_update_every=args.ema_update_every,
                     max_batches=remaining,
                     return_details=True,
+                    reporting_lpips=reporting_lpips,
                 )
                 if not isinstance(details, dict):
                     raise RuntimeError("train_epoch(return_details=True) returned non-dict details")
@@ -878,6 +1136,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                     break
 
                 weighted_loss_sum += float(details["loss"]) * chunk_batches
+                weighted_mse_sum += float(details["mse"]) * chunk_batches
+                weighted_pmse_sum += float(details["pmse"]) * chunk_batches
+                weighted_mae_sum += float(details["mae"]) * chunk_batches
+                weighted_lpips_sum += float(details["lpips"]) * chunk_batches
                 batches_done += chunk_batches
 
                 if not bool(details["reload_requested"]):
@@ -886,6 +1148,12 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 pending_chunk_reload = True
 
             train_loss = float(weighted_loss_sum / max(1, batches_done))
+            train_metrics = {
+                "mse": float(weighted_mse_sum / max(1, batches_done)),
+                "pmse": float(weighted_pmse_sum / max(1, batches_done)),
+                "mae": float(weighted_mae_sum / max(1, batches_done)),
+                "lpips": float(weighted_lpips_sum / max(1, batches_done)),
+            }
 
         if writer is not None and train_loader is not None:
             _log_per_dataset_figures(
@@ -896,11 +1164,22 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         if using_ema:
             ema.store(model)
             ema.copy_to(model)
-        val_loss = validate(
+        val_details = validate(
             model, val_loaders, criterion, device,
             writer=writer, epoch=epoch, thermal_guard=thermal_guard,
             max_batches=args.val_batches_per_epoch,
+            return_details=True,
+            reporting_lpips=reporting_lpips,
         )
+        if not isinstance(val_details, dict):
+            raise RuntimeError("validate(return_details=True) returned non-dict details")
+        val_loss = float(val_details["loss"])
+        val_metrics = {
+            "mse": float(val_details["mse"]),
+            "pmse": float(val_details["pmse"]),
+            "mae": float(val_details["mae"]),
+            "lpips": float(val_details["lpips"]),
+        }
         if using_ema:
             ema.restore(model)
 
@@ -914,6 +1193,30 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         else:
             print(f"Train Loss: {train_loss:.4f}")
+        print(
+            "Component Metrics | "
+            f"train(mse={train_metrics['mse']:.6f}, pmse={train_metrics['pmse']:.6f}, "
+            f"mae={train_metrics['mae']:.6f}, lpips={train_metrics['lpips']:.6f})"
+        )
+        if val_loaders:
+            print(
+                "Component Metrics | "
+                f"val(mse={val_metrics['mse']:.6f}, pmse={val_metrics['pmse']:.6f}, "
+                f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f})"
+            )
+
+        if (epoch + 1) % 5 == 0:
+            csv_path = Path("/Users/donaldpg/synthoseis-pretrain-v2/checkpoints/epoch_component_metrics.csv")
+            _append_component_metrics_csv_row(
+                csv_path=csv_path,
+                tb_log_dir=tb_log_dir,
+                epoch=epoch + 1,
+                args=args,
+                n_params=n_params,
+                train_metrics=train_metrics,
+                val_metrics=val_metrics,
+            )
+            print(f"Appended component metrics CSV row: {csv_path}")
 
         # End-of-epoch versioned checkpoint (never overwritten)
         epoch_ckpt = output_dir / f"checkpoint_epoch_{epoch + 1:04d}.pt"
