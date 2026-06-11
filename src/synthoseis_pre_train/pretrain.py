@@ -1205,7 +1205,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f})"
             )
 
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 1 == 0:
             csv_path = Path("/Users/donaldpg/synthoseis-pretrain-v2/checkpoints/epoch_component_metrics.csv")
             _append_component_metrics_csv_row(
                 csv_path=csv_path,
