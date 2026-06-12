@@ -235,8 +235,14 @@ Use `--loss multi_component` to blend reconstruction terms:
 - `--mc_pmse_weight` (default `0.6`)
 - `--mc_mae_weight` (default `0.2`)
 - `--mc_lpips_weight` (default `0.0`)
+- `--mc_tv_weight` (default `0.0`; Total Variation regulariser to reduce blocky/checkerboard artifacts)
 - `--mc_lpips_net` (`alex|vgg|squeeze`, default `alex`)
 - `--mc_pmse_eps` (default `1e-8`)
+
+TV-weight tuning guidance:
+- Start with `--mc_tv_weight 1e-4`.
+- If outputs are still blocky, increase to `3e-4`.
+- If needed, increase further to `1e-3`.
 
 Example:
 
@@ -248,6 +254,7 @@ uv run python train_cli.py \
   --mc_pmse_weight 0.6 \
   --mc_mae_weight 0.2 \
   --mc_lpips_weight 0.0 \
+  --mc_tv_weight 1e-4 \
   --mc_lpips_net alex \
   --mc_pmse_eps 1e-8 \
   --epochs 100

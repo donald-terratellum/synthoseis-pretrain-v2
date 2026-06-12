@@ -316,7 +316,7 @@ def augment_pair_3d(
     z_artifact_margin: int = 0,
     z_stretch_range: Tuple[float, float] = (0.667, 1.5),
     xy_stretch_range: Tuple[float, float] = (0.8, 1.25),
-    phase_range: Tuple[float, float] = (-180.0, 180.0),
+    phase_range: Tuple[float, float, float] = (-120.0, 0.0, 40.0),
     time_to_depth: bool = True,
     normalize: bool = True,
     target_std: float = 1.0
@@ -337,7 +337,7 @@ def augment_pair_3d(
         z_artifact_margin: z-indices to exclude at the deep end of the zarr
         z_stretch_range:  (min, max) scale factor for the z (time/depth) axis
         xy_stretch_range: (min, max) scale factor for the x and y spatial axes
-        phase_range:    (min_deg, max_deg) constant phase shift range in degrees
+        phase_range:    (min_deg, mode_deg, max_deg) triangular phase shift range in degrees
         time_to_depth:   Whether to optionally apply time-to-depth simulation
         normalize:       Whether to normalise to target_std
         target_std:      Target standard deviation for normalisation
@@ -352,7 +352,15 @@ def augment_pair_3d(
     sx = np.random.uniform(*xy_stretch_range)
     sy = np.random.uniform(*xy_stretch_range)
     sz = np.random.uniform(*z_stretch_range)
-    phase_deg = np.random.uniform(*phase_range)
+    if len(phase_range) != 3:
+        raise ValueError("phase_range must contain exactly three values: (min, mode, max)")
+    phase_min, phase_mode, phase_max = (float(v) for v in phase_range)
+    if not (phase_min <= phase_mode <= phase_max):
+        raise ValueError("phase_range must be ordered as (min, mode, max) with min <= mode <= max")
+    if phase_min == phase_mode == phase_max:
+        phase_deg = phase_min
+    else:
+        phase_deg = np.random.triangular(phase_min, phase_mode, phase_max)
     do_t2d = time_to_depth and np.random.rand() < 0.6
     velocity_grad = np.random.uniform(0.3, 0.8) if do_t2d else None
     do_flip_x  = np.random.rand() < 0.5

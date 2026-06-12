@@ -453,10 +453,27 @@ class LPIPSLoss(nn.Module):
         return dist.mean() * self.scale
 
 
+def total_variation_3d(x: torch.Tensor) -> torch.Tensor:
+    """Compute mean total variation across all three spatial axes of a 5-D volume.
+
+    Args:
+        x: Tensor shaped ``[N, C, D, H, W]``.
+
+    Returns:
+        Scalar TV loss (mean of absolute first-order differences along D, H, W).
+    """
+    tv = (
+        torch.abs(x[:, :, 1:, :, :] - x[:, :, :-1, :, :]).mean()
+        + torch.abs(x[:, :, :, 1:, :] - x[:, :, :, :-1, :]).mean()
+        + torch.abs(x[:, :, :, :, 1:] - x[:, :, :, :, :-1]).mean()
+    )
+    return tv
+
+
 class MultiComponentLoss3D(nn.Module):
     """Weighted composite loss for seismic reconstruction.
 
-    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS
+    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS + tv_w * TV
     """
 
     def __init__(
@@ -467,6 +484,7 @@ class MultiComponentLoss3D(nn.Module):
         lpips_weight: float = 0.0,
         lpips_net: str = "alex",
         pmse_eps: float = 1e-8,
+        tv_weight: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -475,12 +493,13 @@ class MultiComponentLoss3D(nn.Module):
             ("pmse_weight", pmse_weight),
             ("mae_weight", mae_weight),
             ("lpips_weight", lpips_weight),
+            ("tv_weight", tv_weight),
         ):
             if value < 0:
                 raise ValueError(f"{name} must be >= 0")
         if float(pmse_eps) <= 0:
             raise ValueError("pmse_eps must be > 0")
-        if float(mse_weight + pmse_weight + mae_weight + lpips_weight) <= 0.0:
+        if float(mse_weight + pmse_weight + mae_weight + lpips_weight + tv_weight) <= 0.0:
             raise ValueError("at least one multi-component loss weight must be > 0")
 
         self.mse_weight = float(mse_weight)
@@ -488,6 +507,7 @@ class MultiComponentLoss3D(nn.Module):
         self.mae_weight = float(mae_weight)
         self.lpips_weight = float(lpips_weight)
         self.pmse_eps = float(pmse_eps)
+        self.tv_weight = float(tv_weight)
 
         self.lpips_loss = LPIPSLoss(enabled=self.lpips_weight > 0.0, net=lpips_net)
 
@@ -505,5 +525,7 @@ class MultiComponentLoss3D(nn.Module):
             total = total + self.mae_weight * F.l1_loss(pred, target)
         if self.lpips_weight > 0.0:
             total = total + self.lpips_weight * self.lpips_loss(pred, target)
+        if self.tv_weight > 0.0:
+            total = total + self.tv_weight * total_variation_3d(pred)
 
         return total

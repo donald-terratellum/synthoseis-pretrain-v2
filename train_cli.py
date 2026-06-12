@@ -228,6 +228,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="LPIPS backbone for --loss=multi_component (default: alex)")
     parser.add_argument("--mc_pmse_eps", type=float, default=1e-8,
                        help="Epsilon clamp for PMSE denominator in --loss=multi_component (default: 1e-8)")
+    parser.add_argument("--mc_tv_weight", type=float, default=0.0,
+                       help="Weight for Total Variation regularisation term in --loss=multi_component (default: 0.0; try 1e-4 to suppress checkerboard artifacts)")
     parser.add_argument("--ema_decay", type=float, default=0.999,
                        help="EMA decay for model weights; set <=0 to disable")
     parser.add_argument("--ema_update_every", type=int, default=1,
@@ -316,6 +318,7 @@ def main(argv: list[str] | None = None) -> None:
         "mc_lpips_weight": parser.get_default("mc_lpips_weight"),
         "mc_lpips_net": parser.get_default("mc_lpips_net"),
         "mc_pmse_eps": parser.get_default("mc_pmse_eps"),
+        "mc_tv_weight": parser.get_default("mc_tv_weight"),
         "unet_levels": parser.get_default("unet_levels"),
         "grad_accum_steps": parser.get_default("grad_accum_steps"),
         "grad_clip_norm": parser.get_default("grad_clip_norm"),

@@ -217,7 +217,7 @@ def test_dipping_layers_topology_preserved():
         target_std=1.0,
         z_stretch_range=(1.0, 1.25),
         xy_stretch_range=(1.0, 1.25),
-        phase_range=(0.0, 0.0),
+        phase_range=(0.0, 0.0, 0.0),
         time_to_depth=False,   # exclude t2d so GT stays analytically tractable
     )
 
@@ -265,3 +265,30 @@ def test_dipping_layers_topology_preserved():
         f"Augmented y vs analytical ground truth: r={corr:.3f}.  "
         "Low correlation suggests the zoom is being applied to the wrong axes."
     )
+
+
+def test_phase_range_uses_triangular_sampling(monkeypatch):
+    """augment_pair_3d must sample phase via a triangular distribution."""
+    vol, _, _ = make_uniform_layers(shape=(128, 128, 128), n_layers=4, seed=3)
+    cube_xyz = np.transpose(vol, (1, 2, 0)).copy()
+
+    triangular_calls = []
+
+    def fake_triangular(left, mode, right):
+        triangular_calls.append((left, mode, right))
+        return 12.5
+
+    monkeypatch.setattr(np.random, "triangular", fake_triangular)
+    monkeypatch.setattr(np.random, "uniform", lambda *args, **kwargs: 1.0)
+    monkeypatch.setattr(np.random, "rand", lambda *args, **kwargs: 1.0)
+
+    _, _, _, params = augment_pair_3d(
+        cube_xyz,
+        target_shape=(128, 128, 128),
+        normalize=False,
+        time_to_depth=False,
+        phase_range=(-120.0, 0.0, 40.0),
+    )
+
+    assert triangular_calls == [(-120.0, 0.0, 40.0)]
+    assert params["phase_deg"] == 12.5

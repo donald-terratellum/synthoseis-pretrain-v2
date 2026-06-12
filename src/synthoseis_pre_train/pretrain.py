@@ -9,6 +9,7 @@ import time
 import math
 import platform
 import csv
+import re
 
 from datetime import datetime, timedelta
 import torch
@@ -83,6 +84,7 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "mc_lpips_weight": 0.0,
     "mc_lpips_net": "alex",
     "mc_pmse_eps": 1e-8,
+    "mc_tv_weight": 0.0,
     "unet_levels": 4,
     "grad_accum_steps": 1,
     "grad_clip_norm": 1.0,
@@ -104,6 +106,7 @@ _COMPONENT_METRIC_CSV_HEADERS = [
     "pmse_weight",
     "mae_weight",
     "lpips_weight",
+    "tv_weight",
     "train mse",
     "train pmse",
     "train mae/L1",
@@ -112,6 +115,10 @@ _COMPONENT_METRIC_CSV_HEADERS = [
     "validation pmse",
     "validation mae/L1",
     "validation LPIPS",
+]
+
+_LEGACY_COMPONENT_METRIC_CSV_HEADERS = [
+    header for header in _COMPONENT_METRIC_CSV_HEADERS if header != "tv_weight"
 ]
 
 
@@ -154,6 +161,67 @@ def _finalize_component_metrics(totals: dict[str, float]) -> dict[str, float]:
     }
 
 
+def _sanitize_component_metric_cells(values: list[str]) -> list[str]:
+    return [v.lstrip("\n") if isinstance(v, str) else str(v).lstrip("\n") for v in values]
+
+
+def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
+    if not csv_path.exists():
+        return
+
+    raw_text = csv_path.read_text(encoding="utf-8")
+    if not raw_text.strip():
+        return
+
+    split_text = re.sub(
+        r"(?<!\n)(?=(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2}),)",
+        "\n",
+        raw_text,
+    )
+    parsed_rows = list(csv.reader(split_text.splitlines()))
+    if not parsed_rows:
+        return
+
+    expected_len = len(_COMPONENT_METRIC_CSV_HEADERS)
+    legacy_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS)
+    normalized_rows: list[list[str]] = []
+    rewrite_needed = split_text != raw_text
+
+    header = _sanitize_component_metric_cells(parsed_rows[0])
+    if header == _COMPONENT_METRIC_CSV_HEADERS:
+        normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+    elif header == _LEGACY_COMPONENT_METRIC_CSV_HEADERS:
+        normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+        rewrite_needed = True
+    else:
+        normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+        rewrite_needed = True
+
+    insert_idx = _COMPONENT_METRIC_CSV_HEADERS.index("tv_weight")
+    for raw_row in parsed_rows[1:]:
+        row = _sanitize_component_metric_cells(raw_row)
+        if not any(cell.strip() for cell in row):
+            rewrite_needed = True
+            continue
+        if len(row) == legacy_len:
+            row = row[:insert_idx] + ["0.000000"] + row[insert_idx:]
+            rewrite_needed = True
+        elif len(row) != expected_len:
+            raise ValueError(
+                f"Unexpected component metrics CSV row width in {csv_path}: "
+                f"expected {expected_len} or {legacy_len} columns, got {len(row)}"
+            )
+        normalized_rows.append(row)
+
+    if not rewrite_needed:
+        return
+
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        writer.writerow(normalized_header)
+        writer.writerows(normalized_rows)
+
+
 def _append_component_metrics_csv_row(
     csv_path: Path,
     tb_log_dir: Path,
@@ -184,6 +252,7 @@ def _append_component_metrics_csv_row(
         f"{float(getattr(args, 'mc_pmse_weight', 0.0)):.6f}",
         f"{float(getattr(args, 'mc_mae_weight', 0.0)):.6f}",
         f"{float(getattr(args, 'mc_lpips_weight', 0.0)):.6f}",
+        f"{float(getattr(args, 'mc_tv_weight', 0.0)):.6f}",
         f"{float(train_metrics.get('mse', float('nan'))):.8f}",
         f"{float(train_metrics.get('pmse', float('nan'))):.8f}",
         f"{float(train_metrics.get('mae', float('nan'))):.8f}",
@@ -195,12 +264,13 @@ def _append_component_metrics_csv_row(
     ]
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
+    _normalize_existing_component_metrics_csv(csv_path)
     write_header = not csv_path.exists()
     with csv_path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f, lineterminator="\n")
         if write_header:
-            writer.writerow(_COMPONENT_METRIC_CSV_HEADERS)
-        writer.writerow(row)
+            writer.writerow(_sanitize_component_metric_cells(_COMPONENT_METRIC_CSV_HEADERS))
+        writer.writerow(_sanitize_component_metric_cells(row))
 
 
 def run_training(config: dict[str, Any]) -> None:
@@ -645,10 +715,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     if sum(float(v) for v in args.mae_smooth_kernel_weights) <= 0:
         _config_error("--mae_smooth_kernel_weights must sum to > 0")
     if args.loss == "multi_component":
-        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight) < 0:
-            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, and --mc_lpips_weight must be >= 0")
-        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight) <= 0:
-            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, or --mc_lpips_weight must be > 0")
+        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight, args.mc_tv_weight) < 0:
+            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, and --mc_tv_weight must be >= 0")
+        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight + args.mc_tv_weight) <= 0:
+            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, or --mc_tv_weight must be > 0")
         if args.mc_pmse_eps <= 0:
             _config_error("--mc_pmse_eps must be > 0")
 
