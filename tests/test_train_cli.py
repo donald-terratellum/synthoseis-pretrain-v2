@@ -54,6 +54,8 @@ def test_parser_defaults_for_multi_component_and_unet_levels():
     assert args.mc_lpips_net == "alex"
     assert args.mc_pmse_eps == 1e-8
     assert args.unet_levels == 4
+    assert args.encoder_depth_profile == "baseline"
+    assert args.encoder_stage_blocks is None
 
 
 def test_parser_accepts_multi_component_and_custom_unet_levels():
@@ -79,6 +81,14 @@ def test_parser_accepts_multi_component_and_custom_unet_levels():
         "64",
         "128",
         "256",
+        "--encoder_depth_profile",
+        "deeper",
+        "--encoder_stage_blocks",
+        "3",
+        "4",
+        "8",
+        "4",
+        "3",
     ])
 
     assert args.loss == "multi_component"
@@ -87,3 +97,5 @@ def test_parser_accepts_multi_component_and_custom_unet_levels():
     assert args.mc_mae_weight == 0.2
     assert args.unet_levels == 5
     assert tuple(args.hidden_dims) == (16, 32, 64, 128, 256)
+    assert args.encoder_depth_profile == "deeper"
+    assert tuple(args.encoder_stage_blocks) == (3, 4, 8, 4, 3)

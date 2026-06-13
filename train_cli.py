@@ -263,6 +263,26 @@ def _build_parser() -> argparse.ArgumentParser:
             "Length must match model hidden dims. Default keeps legacy 3x3 kernels."
         ),
     )
+    parser.add_argument(
+        "--encoder_depth_profile",
+        type=str,
+        choices=["baseline", "deeper", "deepest"],
+        default="baseline",
+        help=(
+            "Named encoder stage-block profile. baseline keeps canonical depths. "
+            "deeper/deepest are supported for unet_levels 3/4."
+        ),
+    )
+    parser.add_argument(
+        "--encoder_stage_blocks",
+        type=int,
+        nargs='+',
+        default=None,
+        help=(
+            "Optional explicit encoder stage block counts. Length must match --unet_levels. "
+            "Overrides --encoder_depth_profile when provided."
+        ),
+    )
     parser.add_argument("--device", type=str, default="auto",
                        help="Device (auto, cuda, mps, cpu)")
     parser.add_argument("--resume", type=str, default=None,
@@ -320,6 +340,7 @@ def main(argv: list[str] | None = None) -> None:
         "mc_pmse_eps": parser.get_default("mc_pmse_eps"),
         "mc_tv_weight": parser.get_default("mc_tv_weight"),
         "unet_levels": parser.get_default("unet_levels"),
+        "encoder_depth_profile": parser.get_default("encoder_depth_profile"),
         "grad_accum_steps": parser.get_default("grad_accum_steps"),
         "grad_clip_norm": parser.get_default("grad_clip_norm"),
         "ema_decay": parser.get_default("ema_decay"),

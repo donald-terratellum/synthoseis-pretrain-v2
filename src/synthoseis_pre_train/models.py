@@ -59,6 +59,59 @@ def _resolve_stage_kernel_sizes(
     return kernel_sizes
 
 
+def _resolve_encoder_stage_blocks(
+    unet_levels: int,
+    encoder_stage_blocks: Tuple[int, ...] | None,
+    encoder_depth_profile: str,
+) -> Tuple[int, ...]:
+    """Resolve per-stage encoder block depths.
+
+    Args:
+        unet_levels: Number of encoder stages.
+        encoder_stage_blocks: Optional explicit per-stage block counts.
+        encoder_depth_profile: Named schedule profile.
+
+    Returns:
+        Tuple of block counts, one per encoder stage.
+
+    Raises:
+        ValueError: If provided counts/profile are invalid for the chosen levels.
+    """
+    if encoder_stage_blocks is not None:
+        if len(encoder_stage_blocks) != unet_levels:
+            raise ValueError(
+                "encoder_stage_blocks length must match unet_levels "
+                f"(got {len(encoder_stage_blocks)} vs {unet_levels})"
+            )
+        if any(int(v) <= 0 for v in encoder_stage_blocks):
+            raise ValueError("encoder_stage_blocks values must be positive integers")
+        return tuple(int(v) for v in encoder_stage_blocks)
+
+    profile = str(encoder_depth_profile).strip().lower()
+    if profile == "baseline":
+        return tuple([3, 4, 6, 3] + [3] * max(0, unet_levels - 4))
+
+    profile_schedules: dict[int, dict[str, Tuple[int, ...]]] = {
+        3: {
+            "deeper": (3, 5, 8),
+        },
+        4: {
+            "deeper": (3, 4, 8, 4),
+            "deepest": (3, 5, 8, 5),
+        },
+    }
+    by_level = profile_schedules.get(unet_levels, {})
+    if profile in by_level:
+        return by_level[profile]
+    valid = "baseline"
+    if by_level:
+        valid = ", ".join(["baseline", *sorted(by_level.keys())])
+    raise ValueError(
+        f"encoder_depth_profile '{encoder_depth_profile}' is not supported for unet_levels={unet_levels}; "
+        f"valid profiles: {valid}"
+    )
+
+
 class ConvNormAct3d(nn.Module):
     """Conv3d + InstanceNorm3d + activation."""
 
@@ -213,8 +266,11 @@ class DecoderUpBlock3d(nn.Module):
         """
         super().__init__()
         # Resize-convolution avoids checkerboard artifacts from transpose conv overlap.
-        self.up_interp = nn.Upsample(scale_factor=2, mode="nearest")
-        self.up_conv = nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False)
+        # trilinear interpolation creates smooth gradients at tile boundaries (vs hard
+        # step-edges from nearest).  The 3x3x3 up_conv then mixes across those boundaries
+        # before the skip concatenation, suppressing the bottleneck tiling artifact.
+        self.up_interp = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
+        self.up_conv = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
         self.refine = ResBlock3d(out_channels + skip_channels, out_channels, kernel_size=kernel_size)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
@@ -222,7 +278,7 @@ class DecoderUpBlock3d(nn.Module):
         x = self.up_interp(x)
         x = self.up_conv(x)
         if x.shape[-3:] != skip.shape[-3:]:
-            x = nn.functional.interpolate(x, size=skip.shape[-3:], mode="nearest")
+            x = nn.functional.interpolate(x, size=skip.shape[-3:], mode="trilinear", align_corners=False)
         return self.refine(torch.cat([x, skip], dim=1))
 
 
@@ -234,6 +290,7 @@ class ResNet50V2Encoder3d(nn.Module):
         in_channels: int,
         base_planes: Tuple[int, ...],
         kernel_sizes: Tuple[int, ...],
+        stage_blocks: Tuple[int, ...] | None = None,
     ):
         """Initialize a 3D ResNet50V2-style encoder backbone.
 
@@ -254,7 +311,8 @@ class ResNet50V2Encoder3d(nn.Module):
         self.stem_pool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
 
         # Canonical ResNet50V2 depths for first four stages, then repeat 3 blocks.
-        block_schedule = [3, 4, 6, 3] + [3] * max(0, len(base_planes) - 4)
+        block_schedule = list(stage_blocks) if stage_blocks is not None else [3, 4, 6, 3] + [3] * max(0, len(base_planes) - 4)
+        self.stage_block_schedule = tuple(int(v) for v in block_schedule)
         stages: list[nn.Module] = []
         for i, planes in enumerate(base_planes):
             if i == 0:
@@ -324,6 +382,8 @@ class SeismicUNet3d(nn.Module):
         use_mamba: bool = False,
         use_checkpoint: bool = True,
         deep_reconstruction_head: bool = False,
+        encoder_stage_blocks: Tuple[int, ...] | None = None,
+        encoder_depth_profile: str = "baseline",
     ):
         """Initialize the seismic reconstruction network.
 
@@ -336,6 +396,8 @@ class SeismicUNet3d(nn.Module):
             use_mamba: Compatibility flag; ignored in this pure ResNetV2 variant.
             use_checkpoint: Enable stage-level gradient checkpointing.
             deep_reconstruction_head: Use a 2-layer head instead of a single 1x1x1 conv.
+            encoder_stage_blocks: Optional explicit encoder block schedule per stage.
+            encoder_depth_profile: Named encoder block schedule profile.
         """
         super().__init__()
         if use_mamba:
@@ -349,10 +411,20 @@ class SeismicUNet3d(nn.Module):
             )
 
         self._stage_kernels = _resolve_stage_kernel_sizes(hidden_dims, kernel_sizes)
+        self._encoder_stage_blocks = _resolve_encoder_stage_blocks(
+            unet_levels=unet_levels,
+            encoder_stage_blocks=encoder_stage_blocks,
+            encoder_depth_profile=encoder_depth_profile,
+        )
         self.use_checkpoint = use_checkpoint
         self.unet_levels = int(unet_levels)
 
-        self.encoder = ResNet50V2Encoder3d(input_channels, hidden_dims, self._stage_kernels)
+        self.encoder = ResNet50V2Encoder3d(
+            input_channels,
+            hidden_dims,
+            self._stage_kernels,
+            stage_blocks=self._encoder_stage_blocks,
+        )
         stem_ch = hidden_dims[0]
 
         enc_out_channels = [h * BottleneckV2_3d.expansion for h in hidden_dims]
@@ -391,8 +463,8 @@ class SeismicUNet3d(nn.Module):
             ]
         )
 
-        self.final_up_interp = nn.Upsample(scale_factor=2, mode="nearest")
-        self.final_up_conv = nn.Conv3d(stem_ch, stem_ch, kernel_size=1, bias=False)
+        self.final_up_interp = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=False)
+        self.final_up_conv = nn.Conv3d(stem_ch, stem_ch, kernel_size=3, padding=1, bias=False)
 
         if deep_reconstruction_head:
             mid_ch = max(1, stem_ch // 2)
@@ -419,7 +491,7 @@ class SeismicUNet3d(nn.Module):
         y = self.final_up_interp(y)
         y = self.final_up_conv(y)
         if y.shape[-3:] != x.shape[-3:]:
-            y = nn.functional.interpolate(y, size=x.shape[-3:], mode="nearest")
+            y = nn.functional.interpolate(y, size=x.shape[-3:], mode="trilinear", align_corners=False)
         return self.head(y).float()
 
     def swap_to_segmentation_head(self, n_classes: int = 1, freeze_body: bool = True) -> None:
@@ -475,6 +547,8 @@ def create_model(
     use_checkpoint: bool = True,
     kernel_sizes: Tuple[int, ...] | None = None,
     deep_reconstruction_head: bool = False,
+    encoder_stage_blocks: Tuple[int, ...] | None = None,
+    encoder_depth_profile: str = "baseline",
     **kwargs,
 ) -> SeismicUNet3d:
     """Factory for SeismicUNet3d with compatibility-friendly arguments.
@@ -484,6 +558,8 @@ def create_model(
         use_checkpoint: Enable gradient checkpointing in the encoder.
         kernel_sizes: Optional odd kernel schedule for refinement blocks.
         deep_reconstruction_head: Enable a deeper regression output head.
+        encoder_stage_blocks: Optional explicit encoder block schedule per stage.
+        encoder_depth_profile: Named encoder block schedule profile.
         **kwargs: Forwarded to SeismicUNet3d.
 
     Returns:
@@ -494,6 +570,8 @@ def create_model(
         use_checkpoint=use_checkpoint,
         kernel_sizes=kernel_sizes,
         deep_reconstruction_head=deep_reconstruction_head,
+        encoder_stage_blocks=encoder_stage_blocks,
+        encoder_depth_profile=encoder_depth_profile,
         **kwargs,
     )
 

@@ -86,6 +86,7 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "mc_pmse_eps": 1e-8,
     "mc_tv_weight": 0.0,
     "unet_levels": 4,
+    "encoder_depth_profile": "baseline",
     "grad_accum_steps": 1,
     "grad_clip_norm": 1.0,
     "ema_decay": 0.999,
@@ -671,6 +672,15 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             "--hidden_dims length must match --unet_levels "
             f"(got hidden_dims={tuple(args.hidden_dims)}, unet_levels={args.unet_levels})"
         )
+    if getattr(args, "encoder_stage_blocks", None) is not None:
+        if len(tuple(args.encoder_stage_blocks)) != int(args.unet_levels):
+            _config_error(
+                "--encoder_stage_blocks length must match --unet_levels "
+                f"(got encoder_stage_blocks={tuple(args.encoder_stage_blocks)}, "
+                f"unet_levels={args.unet_levels})"
+            )
+        if any(int(v) <= 0 for v in tuple(args.encoder_stage_blocks)):
+            _config_error("--encoder_stage_blocks values must be positive integers")
     encoder_downsample_factor = 2 ** (int(args.unet_levels) + 1)
     bottleneck_shape = tuple(int(s) // encoder_downsample_factor for s in args.sample_shape)
     if min(bottleneck_shape) < 2:
@@ -880,15 +890,23 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         print(f"Kernel schedule: {tuple(args.kernel_sizes)}")
     print(f"Channels schedule: {tuple(args.hidden_dims)}")
     print(f"U-Net levels: {int(args.unet_levels)}")
+    print(f"Encoder depth profile: {str(getattr(args, 'encoder_depth_profile', 'baseline'))}")
     model = create_model(
         use_mamba=args.use_mamba,
         input_channels=1,
         hidden_dims=tuple(args.hidden_dims),
         unet_levels=int(args.unet_levels),
         kernel_sizes=tuple(args.kernel_sizes) if args.kernel_sizes is not None else None,
+        encoder_depth_profile=str(getattr(args, "encoder_depth_profile", "baseline")),
+        encoder_stage_blocks=(
+            tuple(args.encoder_stage_blocks)
+            if getattr(args, "encoder_stage_blocks", None) is not None
+            else None
+        ),
         spatial_size=tuple(args.sample_shape),
         deep_reconstruction_head=args.deep_reconstruction_head,
     ).to(device)
+    print(f"Encoder stage blocks: {getattr(model.encoder, 'stage_block_schedule', ())}")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")

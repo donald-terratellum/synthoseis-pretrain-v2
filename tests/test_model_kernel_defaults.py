@@ -1,5 +1,6 @@
 """Regression checks for kernel-size scheduling defaults."""
 
+import pytest
 import torch
 
 from synthoseis_pre_train.models import ResBlock3d, create_model
@@ -71,3 +72,57 @@ def test_model_forward_for_unet_levels_3_to_5():
         with torch.no_grad():
             y = model(x)
         assert tuple(y.shape) == (1, 1, *shape)
+
+
+def test_encoder_depth_profile_schedules_for_unet_levels_4():
+    baseline = create_model(use_checkpoint=False, unet_levels=4, hidden_dims=(16, 32, 64, 128))
+    cheap = create_model(
+        use_checkpoint=False,
+        unet_levels=4,
+        hidden_dims=(16, 32, 64, 128),
+        encoder_depth_profile="deeper",
+    )
+    moderate = create_model(
+        use_checkpoint=False,
+        unet_levels=4,
+        hidden_dims=(16, 32, 64, 128),
+        encoder_depth_profile="deepest",
+    )
+
+    assert baseline.encoder.stage_block_schedule == (3, 4, 6, 3)
+    assert cheap.encoder.stage_block_schedule == (3, 4, 8, 4)
+    assert moderate.encoder.stage_block_schedule == (3, 5, 8, 5)
+
+
+def test_encoder_depth_profile_schedules_for_unet_levels_3():
+    baseline = create_model(use_checkpoint=False, unet_levels=3, hidden_dims=(16, 32, 64))
+    cheap = create_model(
+        use_checkpoint=False,
+        unet_levels=3,
+        hidden_dims=(16, 32, 64),
+        encoder_depth_profile="deeper",
+    )
+
+    assert baseline.encoder.stage_block_schedule == (3, 4, 6)
+    assert cheap.encoder.stage_block_schedule == (3, 5, 8)
+
+
+def test_encoder_depth_profile_rejects_unsupported_profile_for_levels():
+    with pytest.raises(ValueError, match="encoder_depth_profile"):
+        create_model(
+            use_checkpoint=False,
+            unet_levels=3,
+            hidden_dims=(16, 32, 64),
+            encoder_depth_profile="deepest",
+        )
+
+
+def test_explicit_encoder_stage_blocks_override_profile():
+    model = create_model(
+        use_checkpoint=False,
+        unet_levels=4,
+        hidden_dims=(16, 32, 64, 128),
+        encoder_depth_profile="deepest",
+        encoder_stage_blocks=(2, 3, 4, 5),
+    )
+    assert model.encoder.stage_block_schedule == (2, 3, 4, 5)

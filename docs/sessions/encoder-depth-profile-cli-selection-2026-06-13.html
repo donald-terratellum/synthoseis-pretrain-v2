@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Encoder Depth Profile CLI Selection - 2026-06-13</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; line-height: 1.5; color: #111; }
+    h1, h2 { line-height: 1.25; }
+    code { background: #f4f4f4; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul { margin-top: 0.2rem; }
+  </style>
+</head>
+<body>
+  <h1>Encoder Depth Profile CLI Selection - 2026-06-13</h1>
+
+  <h2>Context and Goals</h2>
+  <ul>
+    <li>Add selectable encoder depth schedules through CLI for U-Net levels 3 and 4.</li>
+    <li>Keep baseline behavior available while exposing two deeper presets.</li>
+    <li>Ensure explicit per-stage override remains possible for experiments.</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Added encoder depth profile resolution in the model stack.</li>
+    <li>Added new CLI options: <code>--encoder_depth_profile</code> (baseline/deeper/deepest) and <code>--encoder_stage_blocks</code>.</li>
+    <li>Wired options through training config and model creation.</li>
+    <li>Added validation for explicit stage-block list length and positivity.</li>
+    <li>Added tests for parser defaults/acceptance and model schedule mapping.</li>
+    <li>Renamed profile labels from earlier names to baseline/deeper/deepest.</li>
+  </ul>
+
+  <h2>How Was It Done</h2>
+  <ul>
+    <li>Implemented a resolver mapping profile name + <code>unet_levels</code> to stage block schedules.</li>
+    <li>Preserved canonical baseline schedule for compatibility.</li>
+    <li>Added clear errors for unsupported profile/level combinations.</li>
+    <li>Updated training logs to print selected profile and resolved schedule.</li>
+    <li>Added regression tests for valid mappings, invalid combinations, and override precedence.</li>
+  </ul>
+
+  <h2>When Was It Done and By Whom</h2>
+  <ul>
+    <li>Date: 2026-06-13</li>
+    <li>Authoring agent: GitHub Copilot (GPT-5.3-Codex)</li>
+    <li>Requested by: Donald PG</li>
+  </ul>
+
+  <h2>Basic Info (Relevant Commits, Files Involved)</h2>
+  <ul>
+    <li>Relevant commit(s): created in this session after summary generation.</li>
+    <li>Files modified:
+      <ul>
+        <li>src/synthoseis_pre_train/models.py</li>
+        <li>src/synthoseis_pre_train/pretrain.py</li>
+        <li>train_cli.py</li>
+        <li>tests/test_model_kernel_defaults.py</li>
+        <li>tests/test_train_cli.py</li>
+      </ul>
+    </li>
+    <li>Files created:
+      <ul>
+        <li>docs/sessions/encoder-depth-profile-cli-selection-2026-06-13.md</li>
+        <li>docs/sessions/encoder-depth-profile-cli-selection-2026-06-13.html</li>
+      </ul>
+    </li>
+  </ul>
+
+  <h2>Next and/or Future Follow-Up Work Suggestions</h2>
+  <ul>
+    <li>Add a benchmark script for epoch-time comparisons between baseline/deeper/deepest.</li>
+    <li>Optionally expose named schedules in experiment shell scripts for repeatability.</li>
+    <li>Install pytest in the active environment and run targeted tests for full verification.</li>
+  </ul>
+</body>
+</html>
