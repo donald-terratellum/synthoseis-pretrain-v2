@@ -431,9 +431,9 @@ def train_epoch(
             batch_idx=batch_idx,
         )
         _fetch_elapsed_sec = time.monotonic() - _fetch_t0  # TODO: remove this line
-        if _fetch_elapsed_sec > 0.1 or batch_idx < 3:  # TODO: remove this line
+        if _fetch_elapsed_sec > 1.25 or batch_idx < 3:  # TODO: remove this line
             _fetch_fmt = int(_fetch_elapsed_sec) if _fetch_elapsed_sec >= 1.0 else f"{_fetch_elapsed_sec*1000:.0f}ms"  # TODO: remove this line
-            print(f"    [diag] batch {batch_idx}: fetch_train_batch {_fetch_fmt}")  # TODO: remove this line
+            print(f"         . [diag] batch {batch_idx}: fetch_train_batch {_fetch_fmt}")  # TODO: remove this line
         loader_iter = fetch_result.loader_iter
         if fetch_result.should_break:
             reload_requested = fetch_result.reload_requested

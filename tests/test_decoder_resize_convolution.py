@@ -11,9 +11,9 @@ def test_decoder_block_uses_resize_convolution_layers():
 
     assert isinstance(block.up_interp, nn.Upsample)
     assert block.up_interp.scale_factor == 2.0
-    assert block.up_interp.mode == "nearest"
+    assert block.up_interp.mode == "trilinear"
     assert isinstance(block.up_conv, nn.Conv3d)
-    assert block.up_conv.kernel_size == (1, 1, 1)
+    assert block.up_conv.kernel_size == (3, 3, 3)
 
 
 def test_decoder_block_matches_skip_shape_after_alignment():
