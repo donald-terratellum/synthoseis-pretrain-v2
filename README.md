@@ -236,6 +236,7 @@ Use `--loss multi_component` to blend reconstruction terms:
 - `--mc_mae_weight` (default `0.2`)
 - `--mc_lpips_weight` (default `0.0`)
 - `--mc_tv_weight` (default `0.0`; Total Variation regulariser to reduce blocky/checkerboard artifacts)
+- `--mc_gdl_weight` (default `0.0`; Gradient Difference Loss — penalises differences in spatial gradient magnitude between prediction and target. Unlike TV, GDL preserves real geological edges while suppressing vertical stripe artifacts caused by zeroed trace-cluster masking. Recommended range: `0.05`–`0.2`.)
 - `--mc_lpips_net` (`alex|vgg|squeeze`, default `alex`)
 - `--mc_pmse_eps` (default `1e-8`)
 

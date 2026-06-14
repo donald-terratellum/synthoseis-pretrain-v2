@@ -230,12 +230,35 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Epsilon clamp for PMSE denominator in --loss=multi_component (default: 1e-8)")
     parser.add_argument("--mc_tv_weight", type=float, default=0.0,
                        help="Weight for Total Variation regularisation term in --loss=multi_component (default: 0.0; try 1e-4 to suppress checkerboard artifacts)")
+    parser.add_argument("--mc_gdl_weight", type=float, default=0.0,
+                       help="Weight for Gradient Difference Loss (GDL) term in --loss=multi_component (default: 0.0). GDL penalises differences in spatial gradient magnitude between prediction and target, suppressing vertical stripe artifacts from zeroed trace-cluster masking while preserving real geological edges. Recommended range: 0.05-0.2.")
     parser.add_argument("--ema_decay", type=float, default=0.999,
                        help="EMA decay for model weights; set <=0 to disable")
     parser.add_argument("--ema_update_every", type=int, default=1,
                        help="Update EMA every N optimizer steps (default: 1)")
     parser.add_argument("--sample_shape", type=int, nargs=3, default=[128, 128, 128],
                        help="Sample shape (x y z)")
+    parser.add_argument(
+        "--input_extrema_prob",
+            "--input-extrema-prob",
+        type=float,
+        default=1.0,
+        help="Relative probability for extrema-only input masking strategy (default: 1.0)",
+    )
+    parser.add_argument(
+        "--input_sparse_keep_prob",
+            "--input-sparse-keep-prob",
+        type=float,
+        default=0.0,
+        help="Relative probability for sparse-keep input masking strategy (default: 0.0)",
+    )
+    parser.add_argument(
+        "--input_decimate_trilinear_prob",
+            "--input-decimate-trilinear-prob",
+        type=float,
+        default=0.0,
+        help="Relative probability for decimate+trilinear input masking strategy (default: 0.0)",
+    )
     parser.add_argument(
         "--hidden_dims",
         type=int,
@@ -339,6 +362,7 @@ def main(argv: list[str] | None = None) -> None:
         "mc_lpips_net": parser.get_default("mc_lpips_net"),
         "mc_pmse_eps": parser.get_default("mc_pmse_eps"),
         "mc_tv_weight": parser.get_default("mc_tv_weight"),
+        "mc_gdl_weight": parser.get_default("mc_gdl_weight"),
         "unet_levels": parser.get_default("unet_levels"),
         "encoder_depth_profile": parser.get_default("encoder_depth_profile"),
         "grad_accum_steps": parser.get_default("grad_accum_steps"),

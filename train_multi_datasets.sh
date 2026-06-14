@@ -75,6 +75,9 @@ STATS_MAX_WEIGHT=${STATS_MAX_WEIGHT:-1.0}
 STATS_MAE_WEIGHT=${STATS_MAE_WEIGHT:-1.0}
 STATS_MSE_WEIGHT=${STATS_MSE_WEIGHT:-1.0}
 STATS_STD_RATIO_CLIP=${STATS_STD_RATIO_CLIP:-10.0}
+INPUT_EXTREMA_PROB=${INPUT_EXTREMA_PROB:-1.0}
+INPUT_SPARSE_KEEP_PROB=${INPUT_SPARSE_KEEP_PROB:-0.0}
+INPUT_DECIMATE_TRILINEAR_PROB=${INPUT_DECIMATE_TRILINEAR_PROB:-0.0}
 RESUME=${RESUME:-""}
 
 # Deep reconstruction head flag
@@ -251,6 +254,18 @@ while [[ $# -gt 0 ]]; do
       STATS_STD_RATIO_CLIP="$2"
       shift 2
       ;;
+    --input-extrema-prob)
+      INPUT_EXTREMA_PROB="$2"
+      shift 2
+      ;;
+    --input-sparse-keep-prob)
+      INPUT_SPARSE_KEEP_PROB="$2"
+      shift 2
+      ;;
+    --input-decimate-trilinear-prob)
+      INPUT_DECIMATE_TRILINEAR_PROB="$2"
+      shift 2
+      ;;
     --overnight)
       # Already handled above; consume the flag so it isn't treated as unknown.
       shift
@@ -327,6 +342,12 @@ while [[ $# -gt 0 ]]; do
       echo "                       Sliding_stats component weights (all default: 1.0)"
       echo "  --stats-std-ratio-clip NUM"
       echo "                       Std-ratio clipping bound for sliding_stats (default: 10.0)"
+      echo "  --input-extrema-prob NUM"
+      echo "                       Relative probability for extrema-only input strategy (default: 1.0)"
+      echo "  --input-sparse-keep-prob NUM"
+      echo "                       Relative probability for sparse-keep input strategy (default: 0.0)"
+      echo "  --input-decimate-trilinear-prob NUM"
+      echo "                       Relative probability for decimate+trilinear input strategy (default: 0.0)"
       echo "  --overnight           Enable overnight/unattended mode: applies safer thermal defaults"
       echo "                       (max-c 80, cooldown 420s, check every 5 batches, pressure=fair)"
       echo "                       and stability-first optimizer settings. Individual flags override."
@@ -387,6 +408,7 @@ else
 echo "Loss function:       ${LOSS}"
 fi
 echo "Backprop config:     grad_accum_steps=${GRAD_ACCUM_STEPS}; grad_clip_norm=${GRAD_CLIP_NORM}; ema_decay=${EMA_DECAY}; ema_update_every=${EMA_UPDATE_EVERY}"
+echo "Input masking probs: extrema=${INPUT_EXTREMA_PROB}, sparse_keep=${INPUT_SPARSE_KEEP_PROB}, decimate_trilinear=${INPUT_DECIMATE_TRILINEAR_PROB}"
 [[ -n "${RESUME}" ]] && echo "Resume from: ${RESUME}"
 echo ""
 
@@ -463,6 +485,9 @@ uv run python -u train_cli.py \
     --stats_mae_weight "${STATS_MAE_WEIGHT}" \
     --stats_mse_weight "${STATS_MSE_WEIGHT}" \
     --stats_std_ratio_clip "${STATS_STD_RATIO_CLIP}" \
+    --input_extrema_prob "${INPUT_EXTREMA_PROB}" \
+    --input_sparse_keep_prob "${INPUT_SPARSE_KEEP_PROB}" \
+    --input_decimate_trilinear_prob "${INPUT_DECIMATE_TRILINEAR_PROB}" \
     ${RESUME:+--resume "${RESUME}"}
 
 echo "=== Multi-dataset training complete ==="

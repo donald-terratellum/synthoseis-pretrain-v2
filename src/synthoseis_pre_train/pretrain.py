@@ -56,7 +56,7 @@ from synthoseis_pre_train._validation_loop import _prepare_validation_dataset, _
 from synthoseis_pre_train._train_progress import _log_train_progress_and_maybe_checkpoint
 from synthoseis_pre_train._train_batch_fetch import _fetch_train_batch
 from synthoseis_pre_train._train_step import _maybe_apply_optimizer_step
-from synthoseis_pre_train.losses import LPIPSLoss, compute_pmse_loss
+from synthoseis_pre_train.losses import LPIPSLoss, compute_pmse_loss, gradient_difference_loss_3d
 
 
 DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
@@ -85,6 +85,7 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "mc_lpips_net": "alex",
     "mc_pmse_eps": 1e-8,
     "mc_tv_weight": 0.0,
+    "mc_gdl_weight": 0.0,
     "unet_levels": 4,
     "encoder_depth_profile": "baseline",
     "grad_accum_steps": 1,
@@ -108,18 +109,31 @@ _COMPONENT_METRIC_CSV_HEADERS = [
     "mae_weight",
     "lpips_weight",
     "tv_weight",
+    "gdl_weight",
     "train mse",
     "train pmse",
     "train mae/L1",
     "train LPIPS",
+    "train gdl",
     "validation mse",
     "validation pmse",
     "validation mae/L1",
     "validation LPIPS",
+    "validation gdl",
 ]
 
+_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV = [
+    header
+    for header in _COMPONENT_METRIC_CSV_HEADERS
+    if header not in ("tv_weight", "gdl_weight", "train gdl", "validation gdl")
+]
 _LEGACY_COMPONENT_METRIC_CSV_HEADERS = [
-    header for header in _COMPONENT_METRIC_CSV_HEADERS if header != "tv_weight"
+    header
+    for header in _COMPONENT_METRIC_CSV_HEADERS
+    if header not in ("gdl_weight", "train gdl", "validation gdl")
+]
+_LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT = [
+    header for header in _COMPONENT_METRIC_CSV_HEADERS if header not in ("train gdl", "validation gdl")
 ]
 
 
@@ -130,6 +144,7 @@ def _new_component_metric_totals() -> dict[str, float]:
         "pmse": 0.0,
         "mae": 0.0,
         "lpips": 0.0,
+        "gdl": 0.0,
     }
 
 
@@ -144,12 +159,14 @@ def _update_component_metric_totals(
     pmse = float(compute_pmse_loss(pred, target).item())
     mae = float(F.l1_loss(pred, target).item())
     lpips = float(lpips_metric(pred, target).item()) if lpips_metric is not None else 0.0
+    gdl = float(gradient_difference_loss_3d(pred, target).item())
 
     totals["count"] += batch_size
     totals["mse"] += mse * batch_size
     totals["pmse"] += pmse * batch_size
     totals["mae"] += mae * batch_size
     totals["lpips"] += lpips * batch_size
+    totals["gdl"] += gdl * batch_size
 
 
 def _finalize_component_metrics(totals: dict[str, float]) -> dict[str, float]:
@@ -159,6 +176,7 @@ def _finalize_component_metrics(totals: dict[str, float]) -> dict[str, float]:
         "pmse": totals.get("pmse", 0.0) / count,
         "mae": totals.get("mae", 0.0) / count,
         "lpips": totals.get("lpips", 0.0) / count,
+        "gdl": totals.get("gdl", 0.0) / count,
     }
 
 
@@ -185,12 +203,16 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
 
     expected_len = len(_COMPONENT_METRIC_CSV_HEADERS)
     legacy_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS)
+    legacy_gdl_weight_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT)
     normalized_rows: list[list[str]] = []
     rewrite_needed = split_text != raw_text
 
     header = _sanitize_component_metric_cells(parsed_rows[0])
     if header == _COMPONENT_METRIC_CSV_HEADERS:
         normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+    elif header == _LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT:
+        normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+        rewrite_needed = True
     elif header == _LEGACY_COMPONENT_METRIC_CSV_HEADERS:
         normalized_header = _COMPONENT_METRIC_CSV_HEADERS
         rewrite_needed = True
@@ -198,19 +220,37 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
         normalized_header = _COMPONENT_METRIC_CSV_HEADERS
         rewrite_needed = True
 
-    insert_idx = _COMPONENT_METRIC_CSV_HEADERS.index("tv_weight")
+    tv_idx = _COMPONENT_METRIC_CSV_HEADERS.index("tv_weight")
+    gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("gdl_weight")
+    train_gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("train gdl")
+    validation_gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("validation gdl")
+    legacy_no_tv_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV)
     for raw_row in parsed_rows[1:]:
         row = _sanitize_component_metric_cells(raw_row)
         if not any(cell.strip() for cell in row):
             rewrite_needed = True
             continue
-        if len(row) == legacy_len:
-            row = row[:insert_idx] + ["0.000000"] + row[insert_idx:]
+        if len(row) == legacy_no_tv_len:
+            # Oldest rows missing tv_weight, gdl_weight, train gdl, and validation gdl.
+            row = row[:tv_idx] + ["0.000000", "0.000000"] + row[tv_idx:]
+            row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
+            row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
+            rewrite_needed = True
+        elif len(row) == legacy_len:
+            # Rows with tv_weight but missing gdl_weight, train gdl, and validation gdl.
+            row = row[:gdl_idx] + ["0.000000"] + row[gdl_idx:]
+            row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
+            row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
+            rewrite_needed = True
+        elif len(row) == legacy_gdl_weight_len:
+            # Rows with gdl_weight but missing train/validation gdl metric columns.
+            row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
+            row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
             rewrite_needed = True
         elif len(row) != expected_len:
             raise ValueError(
                 f"Unexpected component metrics CSV row width in {csv_path}: "
-                f"expected {expected_len} or {legacy_len} columns, got {len(row)}"
+                f"expected {expected_len}, {legacy_len}, or {legacy_gdl_weight_len} columns, got {len(row)}"
             )
         normalized_rows.append(row)
 
@@ -254,14 +294,17 @@ def _append_component_metrics_csv_row(
         f"{float(getattr(args, 'mc_mae_weight', 0.0)):.6f}",
         f"{float(getattr(args, 'mc_lpips_weight', 0.0)):.6f}",
         f"{float(getattr(args, 'mc_tv_weight', 0.0)):.6f}",
+        f"{float(getattr(args, 'mc_gdl_weight', 0.0)):.6f}",
         f"{float(train_metrics.get('mse', float('nan'))):.8f}",
         f"{float(train_metrics.get('pmse', float('nan'))):.8f}",
         f"{float(train_metrics.get('mae', float('nan'))):.8f}",
         f"{float(train_metrics.get('lpips', float('nan'))):.8f}",
+        f"{float(train_metrics.get('gdl', float('nan'))):.8f}",
         f"{float(val_metrics.get('mse', float('nan'))):.8f}",
         f"{float(val_metrics.get('pmse', float('nan'))):.8f}",
         f"{float(val_metrics.get('mae', float('nan'))):.8f}",
         f"{float(val_metrics.get('lpips', float('nan'))):.8f}",
+        f"{float(val_metrics.get('gdl', float('nan'))):.8f}",
     ]
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -369,6 +412,7 @@ def train_epoch(
                 "pmse": float("nan"),
                 "mae": float("nan"),
                 "lpips": float("nan"),
+                "gdl": float("nan"),
             }
         return avg_loss
 
@@ -379,12 +423,17 @@ def train_epoch(
     print(f"    Train iterator/sampler startup: {iter_elapsed_min:04.1f}m")
     reload_requested = False
     for batch_idx in range(target_batches):
+        _fetch_t0 = time.monotonic()  # TODO: remove this line
         fetch_result = _fetch_train_batch(
             loader_iter=loader_iter,
             train_loader=train_loader,
             device=device,
             batch_idx=batch_idx,
         )
+        _fetch_elapsed_sec = time.monotonic() - _fetch_t0  # TODO: remove this line
+        if _fetch_elapsed_sec > 0.1 or batch_idx < 3:  # TODO: remove this line
+            _fetch_fmt = int(_fetch_elapsed_sec) if _fetch_elapsed_sec >= 1.0 else f"{_fetch_elapsed_sec*1000:.0f}ms"  # TODO: remove this line
+            print(f"    [diag] batch {batch_idx}: fetch_train_batch {_fetch_fmt}")  # TODO: remove this line
         loader_iter = fetch_result.loader_iter
         if fetch_result.should_break:
             reload_requested = fetch_result.reload_requested
@@ -511,6 +560,7 @@ def train_epoch(
             "pmse": component_metrics["pmse"],
             "mae": component_metrics["mae"],
             "lpips": component_metrics["lpips"],
+            "gdl": component_metrics["gdl"],
         }
     return avg_loss
 
@@ -542,6 +592,7 @@ def validate(
                 "pmse": float("nan"),
                 "mae": float("nan"),
                 "lpips": float("nan"),
+                "gdl": float("nan"),
             }
         return float('nan')
 
@@ -622,6 +673,7 @@ def validate(
             "pmse": float(metrics["pmse"]),
             "mae": float(metrics["mae"]),
             "lpips": float(metrics["lpips"]),
+            "gdl": float(metrics["gdl"]),
         }
     return avg_loss
 
@@ -725,10 +777,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     if sum(float(v) for v in args.mae_smooth_kernel_weights) <= 0:
         _config_error("--mae_smooth_kernel_weights must sum to > 0")
     if args.loss == "multi_component":
-        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight, args.mc_tv_weight) < 0:
-            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, and --mc_tv_weight must be >= 0")
-        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight + args.mc_tv_weight) <= 0:
-            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, or --mc_tv_weight must be > 0")
+        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight, args.mc_tv_weight, getattr(args, "mc_gdl_weight", 0.0)) < 0:
+            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, --mc_tv_weight, and --mc_gdl_weight must be >= 0")
+        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight + args.mc_tv_weight + getattr(args, "mc_gdl_weight", 0.0)) <= 0:
+            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, --mc_tv_weight, or --mc_gdl_weight must be > 0")
         if args.mc_pmse_eps <= 0:
             _config_error("--mc_pmse_eps must be > 0")
 
@@ -1002,6 +1054,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         normalize=True,
         target_std=1.0,
         trace_mask_ratio=0.07,
+        cluster_prob=0.8,
+        input_extrema_prob=float(args.input_extrema_prob),
+        input_sparse_keep_prob=float(args.input_sparse_keep_prob),
+        input_decimate_trilinear_prob=float(args.input_decimate_trilinear_prob),
         array_keys=args.array_keys,
         geologic_score_sampling=(not args.disable_geologic_score_sampling),
         geologic_score_min=float(args.geologic_score_min),
@@ -1013,6 +1069,13 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         geologic_candidate_probes=int(args.geologic_candidate_probes),
         geologic_dist_thresh_start=int(args.geologic_dist_thresh_start),
         geologic_dist_thresh_floor=int(args.geologic_dist_thresh_floor),
+    )
+
+    print(
+        "Input masking strategy probs (extrema/sparse/decimate): "
+        f"{float(args.input_extrema_prob):.4f}/"
+        f"{float(args.input_sparse_keep_prob):.4f}/"
+        f"{float(args.input_decimate_trilinear_prob):.4f}"
     )
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -1173,6 +1236,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 "pmse": float(train_details["pmse"]),
                 "mae": float(train_details["mae"]),
                 "lpips": float(train_details["lpips"]),
+                "gdl": float(train_details["gdl"]),
             }
         else:
             target_batches = max(1, int(args.train_batches_per_epoch))
@@ -1182,6 +1246,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             weighted_pmse_sum = 0.0
             weighted_mae_sum = 0.0
             weighted_lpips_sum = 0.0
+            weighted_gdl_sum = 0.0
             pending_chunk_reload = False
 
             while batches_done < target_batches:
@@ -1228,6 +1293,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 weighted_pmse_sum += float(details["pmse"]) * chunk_batches
                 weighted_mae_sum += float(details["mae"]) * chunk_batches
                 weighted_lpips_sum += float(details["lpips"]) * chunk_batches
+                weighted_gdl_sum += float(details["gdl"]) * chunk_batches
                 batches_done += chunk_batches
 
                 if not bool(details["reload_requested"]):
@@ -1241,6 +1307,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 "pmse": float(weighted_pmse_sum / max(1, batches_done)),
                 "mae": float(weighted_mae_sum / max(1, batches_done)),
                 "lpips": float(weighted_lpips_sum / max(1, batches_done)),
+                "gdl": float(weighted_gdl_sum / max(1, batches_done)),
             }
 
         if writer is not None and train_loader is not None:
@@ -1267,6 +1334,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             "pmse": float(val_details["pmse"]),
             "mae": float(val_details["mae"]),
             "lpips": float(val_details["lpips"]),
+            "gdl": float(val_details["gdl"]),
         }
         if using_ema:
             ema.restore(model)
@@ -1284,13 +1352,13 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         print(
             "Component Metrics | "
             f"train(mse={train_metrics['mse']:.6f}, pmse={train_metrics['pmse']:.6f}, "
-            f"mae={train_metrics['mae']:.6f}, lpips={train_metrics['lpips']:.6f})"
+            f"mae={train_metrics['mae']:.6f}, lpips={train_metrics['lpips']:.6f}, gdl={train_metrics['gdl']:.6f})"
         )
         if val_loaders:
             print(
                 "Component Metrics | "
                 f"val(mse={val_metrics['mse']:.6f}, pmse={val_metrics['pmse']:.6f}, "
-                f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f})"
+                f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f}, gdl={val_metrics['gdl']:.6f})"
             )
 
         if (epoch + 1) % 1 == 0:

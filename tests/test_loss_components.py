@@ -27,6 +27,29 @@ def test_lpips_disabled_returns_zero_for_3d_inputs():
     assert float(loss) == 0.0
 
 
+def test_lpips_extracts_three_orthogonal_middle_planes_for_3d_inputs():
+    x = torch.arange(1 * 1 * 5 * 6 * 7, dtype=torch.float32).reshape(1, 1, 5, 6, 7)
+
+    planes = LPIPSLoss._extract_middle_planes(x)
+
+    assert len(planes) == 3
+    assert tuple(planes[0].shape) == (1, 1, 6, 7)
+    assert tuple(planes[1].shape) == (1, 1, 5, 7)
+    assert tuple(planes[2].shape) == (1, 1, 5, 6)
+    assert torch.equal(planes[0], x[:, :, x.shape[2] // 2, :, :])
+    assert torch.equal(planes[1], x[:, :, :, x.shape[3] // 2, :])
+    assert torch.equal(planes[2], x[:, :, :, :, x.shape[4] // 2])
+
+
+def test_lpips_extract_middle_planes_keeps_2d_inputs_as_single_plane():
+    x = torch.randn(2, 1, 11, 13)
+
+    planes = LPIPSLoss._extract_middle_planes(x)
+
+    assert len(planes) == 1
+    assert torch.equal(planes[0], x)
+
+
 def test_multi_component_matches_weighted_mse_pmse_mae_without_lpips():
     recon = torch.randn(2, 1, 12, 12, 12)
     target = torch.randn(2, 1, 12, 12, 12)

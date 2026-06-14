@@ -1,5 +1,12 @@
 import numpy as np
-from synthoseis_pre_train.masking import create_mask_3d, apply_mask_to_seismic
+from synthoseis_pre_train.masking import (
+    create_mask_3d,
+    apply_mask_to_seismic,
+    keep_trace_extrema_only,
+    apply_input_random_sparse_keep,
+    apply_input_decimate_trilinear,
+    apply_input_trace_dropout,
+)
 
 
 def test_create_mask_3d_all_masked_when_full_ratio_and_prob():
@@ -32,10 +39,10 @@ def test_peaks_troughs_preserved_when_no_trace_masking():
 
     # Only the local extrema (z=3) for that trace should be True; neighbors along z should be False
     assert mask.shape == seismic.shape
-    assert mask[3, tx, ty] is True
+    assert bool(mask[3, tx, ty])
     # neighbors should be masked (False)
-    assert mask[2, tx, ty] is False
-    assert mask[4, tx, ty] is False
+    assert not bool(mask[2, tx, ty])
+    assert not bool(mask[4, tx, ty])
 
 
 def test_apply_mask_to_seismic_fills_with_zero():
@@ -53,3 +60,51 @@ def test_apply_mask_to_seismic_fills_with_zero():
     assert masked_data[1, 1, 1] == original[1, 1, 1]
     # returned mask should be identical
     assert np.array_equal(used_mask, mask)
+
+
+def test_keep_trace_extrema_only_retains_local_extrema_values():
+    z, x, y = 7, 3, 2
+    seismic = np.zeros((z, x, y), dtype=np.float32)
+    seismic[:, 1, 1] = np.array([0.0, 0.1, 1.0, 0.2, 2.0, 0.1, 0.0], dtype=np.float32)
+
+    out = keep_trace_extrema_only(seismic)
+
+    assert out.shape == seismic.shape
+    # Interior local extrema at z=2 (peak), z=3 (trough), z=4 (peak) are kept.
+    assert out[2, 1, 1] == seismic[2, 1, 1]
+    assert out[3, 1, 1] == seismic[3, 1, 1]
+    assert out[4, 1, 1] == seismic[4, 1, 1]
+    # Non-extrema neighbors are zeroed.
+    assert out[1, 1, 1] == 0.0
+    assert out[5, 1, 1] == 0.0
+
+
+def test_apply_input_random_sparse_keep_preserves_some_voxels():
+    seismic = np.random.RandomState(1).randn(8, 8, 8).astype(np.float32)
+    out = apply_input_random_sparse_keep(
+        seismic,
+        fraction_min=0.2,
+        fraction_max=0.2,
+        method="uniform",
+    )
+
+    kept = int(np.count_nonzero(out))
+    assert out.shape == seismic.shape
+    assert kept > 0
+    assert kept < seismic.size
+
+
+def test_apply_input_decimate_trilinear_preserves_anchor_samples():
+    seismic = np.random.RandomState(2).randn(9, 9, 9).astype(np.float32)
+    out = apply_input_decimate_trilinear(seismic, parity=0)
+
+    assert out.shape == seismic.shape
+    assert np.allclose(out[0::2, 0::2, 0::2], seismic[0::2, 0::2, 0::2])
+
+
+def test_apply_input_trace_dropout_masks_full_traces():
+    seismic = np.ones((8, 8, 8), dtype=np.float32)
+    out = apply_input_trace_dropout(seismic, trace_mask_ratio=1.0, cluster_prob=1.0, random_seed=3)
+
+    assert out.shape == seismic.shape
+    assert np.count_nonzero(out) == 0

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Session Summary: Masking, Dataloader, Loss Diagnostics, and GDL</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 40px auto; max-width: 980px; line-height: 1.55; color: #1f2937; }
+    h1, h2 { color: #111827; }
+    code { background: #f3f4f6; padding: 0.1rem 0.25rem; border-radius: 4px; }
+    hr { border: none; border-top: 1px solid #d1d5db; margin: 24px 0; }
+    ul { padding-left: 22px; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: Masking, Dataloader, Loss Diagnostics, and GDL</h1>
+  <p><strong>Date:</strong> 2026-06-14<br><strong>Branch:</strong> <code>feature/multi-loss-and-unet-levels</code></p>
+  <hr>
+
+  <h2>Context and Goals</h2>
+  <p>This session focused on improving the seismic pre-training pipeline in four connected areas:</p>
+  <ul>
+    <li>Plan and implement new input masking strategies and ensure clustered full-trace masking is always applied after the selected per-sample masking strategy.</li>
+    <li>Investigate training slowdowns and silent failures, especially around masking and dataloader behavior.</li>
+    <li>Improve perceptual and structural training losses, including LPIPS behavior and a new Gradient Difference Loss (GDL) term for suppressing stripe artifacts caused by zeroed trace clusters.</li>
+    <li>Add targeted diagnostics, real-data masking reports, and CSV reporting updates so training behavior is easier to interpret and compare.</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <h3>1. Input masking feature implementation</h3>
+  <ul>
+    <li>Added three configurable per-sample input masking strategies: extrema-only retention, sparse voxel keep, and decimate + trilinear reconstruction.</li>
+    <li>Enforced post-strategy clustered trace dropout so x-only zeroed traces are always applied after whichever masking strategy was chosen.</li>
+    <li>Added CLI/config plumbing for the new masking probabilities.</li>
+  </ul>
+
+  <h3>2. LPIPS improvement</h3>
+  <ul>
+    <li>Verified and updated LPIPS for 3D volumes so it uses three orthogonal middle planes rather than only two vertical slices.</li>
+  </ul>
+
+  <h3>3. CLI and wrapper updates</h3>
+  <ul>
+    <li>Added underscore and hyphen forms for the new masking flags in the training CLI.</li>
+    <li>Updated the multi-dataset shell wrapper to expose the same masking controls.</li>
+  </ul>
+
+  <h3>4. Runtime investigation and diagnostics</h3>
+  <ul>
+    <li>Investigated silent training failure symptoms and narrowed likely cause to external termination / resource pressure rather than an in-process Python traceback.</li>
+    <li>Added removable timing diagnostics to masking functions and to train-batch fetch timing.</li>
+    <li>Built a real-data masking report test using a synthoseis-generated Zarr store, printing retained / changed / masked percentages and elapsed time for each masking method.</li>
+  </ul>
+
+  <h3>5. Dataloader simplification</h3>
+  <ul>
+    <li>Refactored the non-cached dataloader path to stop materializing full cubes per sample.</li>
+    <li>It now passes zarr array handles into extraction helpers so only the selected subvolume window is read.</li>
+  </ul>
+
+  <h3>6. Poisson masking performance repair</h3>
+  <ul>
+    <li>Optimized the Poisson-like sparse keep path to avoid multi-minute runtimes on dense keep fractions.</li>
+    <li>Added an adaptive high-density fallback and a cheaper low-density rejection path.</li>
+  </ul>
+
+  <h3>7. New GDL loss support</h3>
+  <ul>
+    <li>Implemented <code>mc_gdl_weight</code> in <code>MultiComponentLoss3D</code>.</li>
+    <li>Added Gradient Difference Loss (GDL) to suppress stripe artifacts while preserving true geological discontinuities.</li>
+    <li>Added <code>gdl_weight</code> plus <code>train gdl</code> / <code>validation gdl</code> reporting in the per-epoch component metrics CSV.</li>
+  </ul>
+
+  <h2>How It Was Done</h2>
+  <ul>
+    <li>Used focused code reads around the controlling paths in masking, dataloader, augmentation, pretrain runtime, and loss construction/reporting.</li>
+    <li>Implemented changes incrementally using small patch edits.</li>
+    <li>Validated after each substantive change with targeted pytest runs and small benchmarks.</li>
+    <li>Compared train/validation PMSE behavior against code paths and git history to confirm there was no hidden validation-only bug in the PMSE implementation.</li>
+  </ul>
+  <p>Key validation actions completed during the session included targeted pytest runs for masking, loss components, CLI parsing, merged dataloader behavior, and the real-data masking report.</p>
+
+  <h2>When and By Whom</h2>
+  <ul>
+    <li><strong>Date:</strong> 2026-06-14</li>
+    <li><strong>Primary author:</strong> GitHub Copilot</li>
+    <li><strong>Directed by:</strong> Donald P. Griffith</li>
+    <li><strong>Repository branch:</strong> <code>feature/multi-loss-and-unet-levels</code></li>
+  </ul>
+
+  <h2>Basic Info</h2>
+  <p><strong>Relevant files involved:</strong></p>
+  <ul>
+    <li><code>README.md</code></li>
+    <li><code>src/synthoseis_pre_train/_criterion.py</code></li>
+    <li><code>src/synthoseis_pre_train/augmentation.py</code></li>
+    <li><code>src/synthoseis_pre_train/dataloader.py</code></li>
+    <li><code>src/synthoseis_pre_train/losses.py</code></li>
+    <li><code>src/synthoseis_pre_train/masking.py</code></li>
+    <li><code>src/synthoseis_pre_train/pretrain.py</code></li>
+    <li><code>tests/test_loss_components.py</code></li>
+    <li><code>tests/test_masking_behavior.py</code></li>
+    <li><code>tests/test_masking_methods_report.py</code></li>
+    <li><code>tests/test_merged_dataloader.py</code></li>
+    <li><code>tests/test_train_cli.py</code></li>
+    <li><code>train_cli.py</code></li>
+    <li><code>train_multi_datasets.sh</code></li>
+  </ul>
+  <p><strong>Relevant commit context:</strong> this summary captures working-tree changes made during the 2026-06-14 session. The resulting session commit and push details are reported after commit/push completion.</p>
+
+  <h2>Next / Future Follow-Up Work Suggestions</h2>
+  <ul>
+    <li>Add a targeted test that exercises <code>mc_gdl_weight</code> numerically and verifies the new CSV columns explicitly.</li>
+    <li>Consider a lateral-only TV variant (<code>x/y</code> only) so TV can be compared more directly against GDL for stripe suppression.</li>
+    <li>Add optional train/validation timing diagnostics around forward, loss, backward, and optimizer step to complement the fetch timing already added.</li>
+    <li>Run a controlled ablation across MAE + LPIPS, TV, and GDL combinations.</li>
+    <li>Revisit masked-loss support after artifact behavior stabilizes, since the current loss still supervises the full target volume.</li>
+  </ul>
+</body>
+</html>

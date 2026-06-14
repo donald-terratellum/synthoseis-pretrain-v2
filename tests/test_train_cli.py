@@ -56,6 +56,9 @@ def test_parser_defaults_for_multi_component_and_unet_levels():
     assert args.unet_levels == 4
     assert args.encoder_depth_profile == "baseline"
     assert args.encoder_stage_blocks is None
+    assert args.input_extrema_prob == 1.0
+    assert args.input_sparse_keep_prob == 0.0
+    assert args.input_decimate_trilinear_prob == 0.0
 
 
 def test_parser_accepts_multi_component_and_custom_unet_levels():
@@ -89,10 +92,19 @@ def test_parser_accepts_multi_component_and_custom_unet_levels():
         "8",
         "4",
         "3",
+        "--input_extrema_prob",
+        "0.25",
+        "--input_sparse_keep_prob",
+        "0.50",
+        "--input_decimate_trilinear_prob",
+        "0.25",
     ])
 
     assert args.loss == "multi_component"
     assert args.mc_mse_weight == 0.1
+    assert args.input_extrema_prob == 0.25
+    assert args.input_sparse_keep_prob == 0.50
+    assert args.input_decimate_trilinear_prob == 0.25
     assert args.mc_pmse_weight == 0.7
     assert args.mc_mae_weight == 0.2
     assert args.unet_levels == 5

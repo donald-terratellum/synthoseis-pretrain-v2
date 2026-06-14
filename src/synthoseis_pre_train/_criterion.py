@@ -72,6 +72,7 @@ def _build_criterion(args) -> nn.Module:
             lpips_net=str(getattr(args, "mc_lpips_net", "alex")),
             pmse_eps=float(getattr(args, "mc_pmse_eps", 1e-8)),
             tv_weight=float(getattr(args, "mc_tv_weight", 0.0)),
+            gdl_weight=float(getattr(args, "mc_gdl_weight", 0.0)),
         )
     raise ValueError(f"Unknown loss function: {loss_fn!r}")
 
@@ -171,9 +172,10 @@ def _print_loss_and_backprop_summary(
         _lpips_net = str(getattr(args, "mc_lpips_net", "alex"))
         _pmse_eps = float(getattr(args, "mc_pmse_eps", 1e-8))
         _tv = float(getattr(args, "mc_tv_weight", 0.0))
+        _gdl = float(getattr(args, "mc_gdl_weight", 0.0))
         print(
             f"{' ':4}{' ':<{label_width}}   - "
-            f"weights(mse={_mse:g}, pmse={_pmse:g}, mae={_mae:g}, lpips={_lpips:g}, tv={_tv:g})"
+            f"weights(mse={_mse:g}, pmse={_pmse:g}, mae={_mae:g}, lpips={_lpips:g}, tv={_tv:g}, gdl={_gdl:g})"
         )
         print(
             f"{' ':4}{' ':<{label_width}}     "

@@ -29,6 +29,10 @@ class SeismicDataset:
         data_path: str,
         sample_shape: Tuple[int, int, int] = (128, 128, 128),
         trace_mask_ratio: float = 0.07,
+        cluster_prob: float = 0.8,
+        input_extrema_prob: float = 1.0,
+        input_sparse_keep_prob: float = 0.0,
+        input_decimate_trilinear_prob: float = 0.0,
         augment: bool = True,
         normalize: bool = True,
         target_std: float = 1.0,
@@ -50,7 +54,11 @@ class SeismicDataset:
         Args:
             data_path: Path to Zarr seismic data
             sample_shape: Shape of each training sample (x, y, z)
-            trace_mask_ratio: Ratio of traces to mask
+            trace_mask_ratio: Ratio of traces to mask for post-strategy cluster dropout
+            cluster_prob: Probability of masking each trace within a sampled 3x3 cluster
+            input_extrema_prob: Relative probability of extrema-only strategy
+            input_sparse_keep_prob: Relative probability of sparse-keep strategy
+            input_decimate_trilinear_prob: Relative probability of decimate+trilinear strategy
             augment: Whether to apply data augmentation
             normalize: Whether to normalize samples
             target_std: Target standard deviation after normalization
@@ -60,7 +68,11 @@ class SeismicDataset:
         """
         self.data_path = Path(data_path)
         self.sample_shape = sample_shape
-        self.trace_mask_ratio = trace_mask_ratio
+        self.trace_mask_ratio = float(trace_mask_ratio)
+        self.cluster_prob = float(cluster_prob)
+        self.input_extrema_prob = float(input_extrema_prob)
+        self.input_sparse_keep_prob = float(input_sparse_keep_prob)
+        self.input_decimate_trilinear_prob = float(input_decimate_trilinear_prob)
         self.augment = augment
         self.normalize = normalize
         self.target_std = target_std
@@ -82,7 +94,27 @@ class SeismicDataset:
         self._ranked_point_scores: Optional[np.ndarray] = None
         self._fixed_val_center_xyz: Optional[Tuple[int, int, int]] = None
         self._score_key: Optional[str] = None
-        
+
+        for prob_name, prob_val in (
+            ("input_extrema_prob", self.input_extrema_prob),
+            ("input_sparse_keep_prob", self.input_sparse_keep_prob),
+            ("input_decimate_trilinear_prob", self.input_decimate_trilinear_prob),
+        ):
+            if not 0.0 <= prob_val <= 1.0:
+                raise ValueError(f"{prob_name} must be in [0, 1].")
+
+        prob_sum = self.input_extrema_prob + self.input_sparse_keep_prob + self.input_decimate_trilinear_prob
+        if prob_sum <= 0.0:
+            raise ValueError("At least one input strategy probability must be > 0.")
+        self._input_strategy_probs = np.asarray(
+            [
+                self.input_extrema_prob,
+                self.input_sparse_keep_prob,
+                self.input_decimate_trilinear_prob,
+            ],
+            dtype=np.float64,
+        ) / float(prob_sum)
+
         # Load zarr data
         self.zarr_data = zarr.open(str(data_path), mode='r')
 
@@ -349,6 +381,21 @@ class SeismicDataset:
 
         return total
     
+    def _apply_input_strategy(self, input_data: np.ndarray) -> np.ndarray:
+        """Apply one configured input strategy to (z, x, y) input_data."""
+        from synthoseis_pre_train.masking import (
+            keep_trace_extrema_only,
+            apply_input_random_sparse_keep,
+            apply_input_decimate_trilinear,
+        )
+
+        selected_idx = int(np.random.choice(np.array([0, 1, 2], dtype=np.int64), p=self._input_strategy_probs))
+        if selected_idx == 0:
+            return keep_trace_extrema_only(input_data)
+        if selected_idx == 1:
+            return apply_input_random_sparse_keep(input_data, method="poisson")
+        return apply_input_decimate_trilinear(input_data)
+
     def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Get a single training sample.
@@ -358,7 +405,9 @@ class SeismicDataset:
             target: Original full data for reconstruction loss
             mask: Boolean mask used to identify masked voxels
         """
-        # Select random cube — retry if the zarr key has been deleted on disk
+        # Select random cube handle — retry if the zarr key has been deleted on disk.
+        # Important: keep this as an on-disk array handle when not caching so
+        # downstream extraction reads only the requested subvolume window.
         if self.cached_data:
             cube = random.choice(self.cached_data)
         else:
@@ -367,7 +416,7 @@ class SeismicDataset:
             cube = None
             for cube_name in candidates:
                 try:
-                    cube = self.zarr_data[cube_name][:]
+                    cube = self.zarr_data[cube_name]
                     break
                 except (KeyError, FileNotFoundError, OSError):
                     continue
@@ -425,15 +474,19 @@ class SeismicDataset:
             input_data = target.copy()
             geom_mask = np.ones(target.shape, dtype=bool)  # no squeeze edges
 
-        # Peak/trough preservation + trace masking — applied to input (x) only.
-        # create_mask_3d receives and returns (z, x, y) — no transpose needed.
-        from synthoseis_pre_train.masking import create_mask_3d, apply_mask_to_seismic
-        trace_mask = create_mask_3d(input_data, trace_mask_ratio=self.trace_mask_ratio)
-        input_data, _, trace_mask = apply_mask_to_seismic(input_data, trace_mask)
+        # Apply one of three masking strategies first, then apply post-strategy
+        # full-trace cluster dropout to x only.
+        from synthoseis_pre_train.masking import apply_input_trace_dropout
 
-        # Combine with geometric mask: exclude squeeze/t2d edge artifacts from loss.
-        # mask=True means "visible to model / included in loss".
-        mask = trace_mask & geom_mask
+        input_data = self._apply_input_strategy(input_data)
+        input_data = apply_input_trace_dropout(
+            input_data,
+            trace_mask_ratio=self.trace_mask_ratio,
+            cluster_prob=self.cluster_prob,
+        )
+
+        # Loss-validity mask remains geometric validity only.
+        mask = geom_mask
 
         return (
             input_data.astype(np.float32),

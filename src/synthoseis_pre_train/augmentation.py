@@ -8,7 +8,7 @@ Implements domain-specific augmentations for seismic data:
 """
 
 import numpy as np
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Any
 from scipy.ndimage import zoom
 
 
@@ -310,7 +310,7 @@ def random_augmentation_3d(
 
 
 def augment_pair_3d(
-    cube: np.ndarray,
+    cube: Any,
     target_shape: Tuple[int, int, int] = (128, 128, 128),
     center_xyz: Optional[Tuple[int, int, int]] = None,
     z_artifact_margin: int = 0,
@@ -330,7 +330,8 @@ def augment_pair_3d(
     zero-padded masked borders that the old fixed-size extraction produced.
 
     Args:
-        cube:            Full zarr volume in (x, y, z) axis order
+        cube:            Full volume-like object in (x, y, z) axis order.
+                 May be a NumPy array or a zarr array handle.
         target_shape:    Output shape in (z, x, y) training order
         center_xyz:      Optional fixed center in zarr (x, y, z) order used
                          during extraction. If None, extraction is random.
@@ -467,7 +468,7 @@ def augment_pair_3d(
 
 
 def extract_random_subvolume(
-    volume: np.ndarray,
+    volume: Any,
     target_shape: Tuple[int, int, int],
     random_seed: Optional[int] = None,
     z_artifact_margin: int = 0,
@@ -476,7 +477,8 @@ def extract_random_subvolume(
     Extract random subvolume from larger seismic volume.
     
     Args:
-        volume: Large 3D seismic array (x, y, z) in zarr axis order
+        volume: Large 3D seismic volume-like object (x, y, z) in zarr axis order.
+            Supports NumPy arrays and zarr arrays; only the selected window is read.
         target_shape: (x, y, z) shape of subvolume
         random_seed: Optional random seed
         z_artifact_margin: Number of z-indices at the deep end to exclude.
@@ -514,7 +516,7 @@ def extract_random_subvolume(
 
 
 def extract_centered_subvolume(
-    volume: np.ndarray,
+    volume: Any,
     target_shape: Tuple[int, int, int],
     center_xyz: Tuple[int, int, int],
     z_artifact_margin: int = 0,

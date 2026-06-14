@@ -417,16 +417,34 @@ class LPIPSLoss(nn.Module):
             self.enabled = False
 
     @staticmethod
+    def _extract_middle_planes(x: torch.Tensor) -> list[torch.Tensor]:
+        """Extract three orthogonal middle planes from a 3D volume.
+
+        For 5D tensors shaped [B, C, D, H, W], returns the middle XY, XZ, and YZ
+        planes as 4D tensors. For 4D image tensors, returns the input unchanged as
+        a single-plane list.
+        """
+        if x.ndim == 4:
+            return [x]
+        if x.ndim != 5:
+            raise ValueError("LPIPS expects input shape [B,C,H,W] or [B,C,D,H,W]")
+
+        mid_d = int(x.shape[2] // 2)
+        mid_h = int(x.shape[3] // 2)
+        mid_w = int(x.shape[4] // 2)
+        xy = x[:, :, mid_d, :, :]
+        xz = x[:, :, :, mid_h, :]
+        yz = x[:, :, :, :, mid_w]
+        return [xy, xz, yz]
+
+    @staticmethod
     def _to_lpips_image(x: torch.Tensor) -> torch.Tensor:
-        """Convert [B,C,D,H,W] or [B,C,H,W] seismic tensors to LPIPS-ready image tensors.
+        """Convert a 4D seismic image tensor to LPIPS-ready image tensor.
 
         LPIPS expects 4D images in approximately [-1, 1] with 3 channels.
         """
-        if x.ndim == 5:
-            # Use the middle depth slice for a stable, deterministic 2D proxy.
-            x = x[:, :, x.shape[2] // 2, :, :]
         if x.ndim != 4:
-            raise ValueError("LPIPS expects input shape [B,C,H,W] or [B,C,D,H,W]")
+            raise ValueError("LPIPS image conversion expects input shape [B,C,H,W]")
 
         x = torch.clamp(x / 10.0, -1.0, 1.0)
         if x.shape[1] == 1:
@@ -441,16 +459,18 @@ class LPIPSLoss(nn.Module):
         if not self.enabled or self.network is None:
             return x.new_zeros(())
 
-        x_img = self._to_lpips_image(x)
-        y_img = self._to_lpips_image(y)
-        
         # Ensure images are on the same device as the LPIPS network
         device = next(self.network.parameters()).device
-        x_img = x_img.to(device)
-        y_img = y_img.to(device)
-        
-        dist = self.network(x_img, y_img)
-        return dist.mean() * self.scale
+        x_planes = self._extract_middle_planes(x)
+        y_planes = self._extract_middle_planes(y)
+
+        dists: list[torch.Tensor] = []
+        for x_plane, y_plane in zip(x_planes, y_planes):
+            x_img = self._to_lpips_image(x_plane).to(device)
+            y_img = self._to_lpips_image(y_plane).to(device)
+            dists.append(self.network(x_img, y_img).mean())
+
+        return torch.stack(dists).mean() * self.scale
 
 
 def total_variation_3d(x: torch.Tensor) -> torch.Tensor:
@@ -470,10 +490,61 @@ def total_variation_3d(x: torch.Tensor) -> torch.Tensor:
     return tv
 
 
+def gradient_difference_loss_3d(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Compute Gradient Difference Loss (GDL) between prediction and target.
+
+    GDL penalises differences in the *magnitude* of spatial gradients rather
+    than the voxel values themselves.  For each spatial axis d the term is::
+
+        mean( | |∂pred/∂d| - |∂target/∂d| | )
+
+    and the three axis terms are averaged.  Unlike Total Variation, which
+    penalises large gradients in the prediction unconditionally, GDL penalises
+    only gradients that *differ* from those in the target, so real geological
+    discontinuities (reflectors, faults) are preserved while spurious stripe
+    boundaries introduced by trace-cluster dropout are suppressed.
+
+    Args:
+        pred:   Prediction tensor shaped ``[N, C, D, H, W]``.
+        target: Ground-truth tensor of the same shape.
+
+    Returns:
+        Scalar GDL value (non-negative).
+    """
+    if pred.shape != target.shape:
+        raise ValueError("pred and target must have identical shape for GDL")
+
+    gdl = (
+        torch.abs(
+            torch.abs(pred[:, :, 1:, :, :] - pred[:, :, :-1, :, :])
+            - torch.abs(target[:, :, 1:, :, :] - target[:, :, :-1, :, :])
+        ).mean()
+        + torch.abs(
+            torch.abs(pred[:, :, :, 1:, :] - pred[:, :, :, :-1, :])
+            - torch.abs(target[:, :, :, 1:, :] - target[:, :, :, :-1, :])
+        ).mean()
+        + torch.abs(
+            torch.abs(pred[:, :, :, :, 1:] - pred[:, :, :, :, :-1])
+            - torch.abs(target[:, :, :, :, 1:] - target[:, :, :, :, :-1])
+        ).mean()
+    ) / 3.0
+    return gdl
+
+
 class MultiComponentLoss3D(nn.Module):
     """Weighted composite loss for seismic reconstruction.
 
-    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS + tv_w * TV
+    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS
+          + tv_w * TV + gdl_w * GDL
+
+    TV  — Total Variation: penalises large gradients in the *prediction*
+          unconditionally.  Good general smoothness regulariser.
+
+    GDL — Gradient Difference Loss: penalises differences in gradient
+          *magnitude* between prediction and target.  Preserves real
+          geological edges while suppressing spurious stripe boundaries
+          caused by zeroed-trace cluster masking.
+          Recommended starting range: 0.05–0.2.
     """
 
     def __init__(
@@ -485,6 +556,7 @@ class MultiComponentLoss3D(nn.Module):
         lpips_net: str = "alex",
         pmse_eps: float = 1e-8,
         tv_weight: float = 0.0,
+        gdl_weight: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -494,12 +566,13 @@ class MultiComponentLoss3D(nn.Module):
             ("mae_weight", mae_weight),
             ("lpips_weight", lpips_weight),
             ("tv_weight", tv_weight),
+            ("gdl_weight", gdl_weight),
         ):
             if value < 0:
                 raise ValueError(f"{name} must be >= 0")
         if float(pmse_eps) <= 0:
             raise ValueError("pmse_eps must be > 0")
-        if float(mse_weight + pmse_weight + mae_weight + lpips_weight + tv_weight) <= 0.0:
+        if float(mse_weight + pmse_weight + mae_weight + lpips_weight + tv_weight + gdl_weight) <= 0.0:
             raise ValueError("at least one multi-component loss weight must be > 0")
 
         self.mse_weight = float(mse_weight)
@@ -508,6 +581,7 @@ class MultiComponentLoss3D(nn.Module):
         self.lpips_weight = float(lpips_weight)
         self.pmse_eps = float(pmse_eps)
         self.tv_weight = float(tv_weight)
+        self.gdl_weight = float(gdl_weight)
 
         self.lpips_loss = LPIPSLoss(enabled=self.lpips_weight > 0.0, net=lpips_net)
 
@@ -527,5 +601,7 @@ class MultiComponentLoss3D(nn.Module):
             total = total + self.lpips_weight * self.lpips_loss(pred, target)
         if self.tv_weight > 0.0:
             total = total + self.tv_weight * total_variation_3d(pred)
+        if self.gdl_weight > 0.0:
+            total = total + self.gdl_weight * gradient_difference_loss_3d(pred, target)
 
         return total
