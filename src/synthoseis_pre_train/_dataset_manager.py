@@ -169,7 +169,7 @@ def _build_loaders(
     for path in sorted(train_paths, key=_mtime):
         name = Path(path).parent.name
         try:
-            loader = cast(DataLoader, create_dataloader(path, augment=True, **loader_kwargs))
+            loader = cast(DataLoader, create_dataloader(path, augment=True, shuffle=False, **loader_kwargs))
             print(f"    {name}: {_dataset_len(loader)} samples, {len(loader)} batches")
             train_per_ds.append((name, loader))
         except Exception as e:
@@ -181,7 +181,7 @@ def _build_loaders(
         train_loader: DataLoader | None = DataLoader(
             merged_dataset,
             batch_size=int(base.batch_size) if base.batch_size is not None else 1,
-            shuffle=True,
+            shuffle=False,
             num_workers=base.num_workers,
             pin_memory=base.pin_memory,
         )
@@ -194,7 +194,7 @@ def _build_loaders(
         for path in sorted(val_paths, key=_mtime):
             name = Path(path).parent.name
             try:
-                loader = cast(DataLoader, create_dataloader(path, augment=False, **loader_kwargs))
+                loader = cast(DataLoader, create_dataloader(path, augment=False, shuffle=False, **loader_kwargs))
                 print(f"    {name}: {_dataset_len(loader)} samples, {len(loader)} batches")
                 val_loaders.append((name, loader))
             except Exception as e:

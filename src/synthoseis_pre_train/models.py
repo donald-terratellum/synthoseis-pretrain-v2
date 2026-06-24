@@ -576,52 +576,82 @@ def create_model(
     )
 
 
-def report_masked_voxel_stats(input: torch.Tensor):
-    """Print masking/extrema/trace retention percentages for a 3D seismic batch."""
+def report_masked_voxel_stats(
+    input: torch.Tensor,
+    target: torch.Tensor | None = None,
+    mask: torch.Tensor | None = None,
+):
+    """Print stage-wise retention percentages for a 3D seismic example.
+
+    The diagnostics are intentionally based on explicit non-zero counts so the
+    reported percentages remain bounded in [0, 100] and can be interpreted as:
+    - raw selection / resize retention versus the full 128^3 sample
+    - voxel retention from extrema/poisson/decimate style masking
+    - whole-trace retention from clustered trace masking
+    """
     while input.ndim > 3:
         input = input[0]
+    if target is not None:
+        while target.ndim > 3:
+            target = target[0]
+    if mask is not None:
+        while mask.ndim > 3:
+            mask = mask[0]
+
     Z, X, Y = input.shape
     total_voxels = Z * X * Y
-    nonzero = (input != 0)
-    nz_idx = nonzero.nonzero(as_tuple=False)
+    target_voxels = total_voxels if target is None else int(target.numel())
+
+    nonzero_in = (input != 0)
+    nz_idx = nonzero_in.nonzero(as_tuple=False)
     if nz_idx.numel() == 0:
-        print(". retained percentages: (container, extrema, clustered) = (0.00%, 0.00%, 0.00%) --> 0.00% retained")
+        print(". retained percentages: (raw, voxel-mask, trace-mask, total) = (0.00%, 0.00%, 0.00%, 0.00%)")
         return
 
-    z_nonzero = (input != 0).any(dim=(1, 2))
-    x_nonzero = (input != 0).any(dim=(0, 2))
-    y_nonzero = (input != 0).any(dim=(0, 1))
-    z_indices = z_nonzero.nonzero(as_tuple=False).squeeze()
-    x_indices = x_nonzero.nonzero(as_tuple=False).squeeze()
-    y_indices = y_nonzero.nonzero(as_tuple=False).squeeze()
-    if z_indices.numel() == 0 or x_indices.numel() == 0 or y_indices.numel() == 0:
-        print(". retained percentages: (container, extrema, clustered) = (0.00%, 0.00%, 0.00%) --> 0.00% retained")
+    target_nonzero = int((target != 0).sum().item()) if target is not None else int(nonzero_in.sum().item())
+    target_nonzero = max(target_nonzero, 0)
+    input_nonzero = int(nonzero_in.sum().item())
+
+    # Count active traces in the target and final input. Each trace is a (z)
+    # column indexed by (x, y).
+    target_trace_counts = (target != 0).sum(dim=0) if target is not None else (input != 0).sum(dim=0)
+    input_trace_counts = (input != 0).sum(dim=0)
+    target_active_traces = int((target_trace_counts > 0).sum().item()) if target is not None else 0
+    input_active_traces = int((input_trace_counts > 0).sum().item()) if input is not None else 0
+
+    if target_active_traces == 0 or target_nonzero == 0:
+        print(". retained percentages: (raw, voxel-mask, trace-mask, total) = (0.00%, 0.00%, 0.00%, 0.00%)")
         return
 
-    min_z, max_z = z_indices[0].item(), z_indices[-1].item()
-    min_x, max_x = x_indices[0].item(), x_indices[-1].item()
-    min_y, max_y = y_indices[0].item(), y_indices[-1].item()
+    raw_selection_pct = 100.0 * target_nonzero / max(target_voxels, 1)
+    raw_selection_pct = max(0.0, min(100.0, raw_selection_pct))
+
+    # Stage-b is the voxel-level masking strategy (extrema-only, Poisson-disc
+    # sampling, or trilinear decimation/infill).  Stage-c is the trace dropout.
+    trace_mask_pct = 100.0 * input_active_traces / max(target_active_traces, 1)
+    trace_mask_pct = max(0.0, min(100.0, trace_mask_pct))
+    combined_voxel_pct = 100.0 * input_nonzero / max(target_nonzero, 1)
+    voxel_mask_pct = combined_voxel_pct * 100.0 / max(trace_mask_pct, 1e-12)
+    voxel_mask_pct = max(0.0, min(100.0, voxel_mask_pct))
+
+    total_retained_pct = 100.0 * input_nonzero / max(target_voxels, 1)
+    total_retained_pct = max(0.0, min(100.0, total_retained_pct))
+
+    # Bounding-box dimensions are still useful for context, but no longer drive
+    # the percentage math because that can exceed 100% for sparse supports.
+    min_z = int(nz_idx[:, 0].min().item())
+    max_z = int(nz_idx[:, 0].max().item())
+    min_x = int(nz_idx[:, 1].min().item())
+    max_x = int(nz_idx[:, 1].max().item())
+    min_y = int(nz_idx[:, 2].min().item())
+    max_y = int(nz_idx[:, 2].max().item())
     z_valid, x_valid, y_valid = tuple((max_z - min_z + 1, max_x - min_x + 1, max_y - min_y + 1))
-    valid_size = z_valid * x_valid * y_valid
-    container_pct = 100.0 * valid_size / total_voxels
-
-    extrema_valid = input[min_z:max_z + 1, min_x:max_x + 1, min_y:max_y + 1]
-    extrema_trace_counts = (extrema_valid != 0).sum(dim=0)
-    nonzero_traces = (extrema_trace_counts > 0)
-    num_traces = nonzero_traces.sum().item()
-    depth = max_z - min_z + 1
-    denom = num_traces * depth if depth > 0 else 1
-    numer = extrema_trace_counts.sum().item()
-    extrema_pct = 100.0 * numer / denom if denom > 0 else 0.0
-
-    clustered_pct = 100.0 * num_traces / ((max_x - min_x + 1) * (max_y - min_y + 1))
-    retained_pct = 100.0 * nz_idx.numel() / total_voxels
 
     print(
-        f"         . retained percentages: (container shape, container, extrema, clustered) = ("
-        f"{(z_valid, x_valid, y_valid)}, "
-        f"{container_pct:.2f}%, "
-        f"{extrema_pct:.2f}%, "
-        f"{clustered_pct:.2f}%) --> "
-        f"{retained_pct:.2f}% retained"
+        f"         . retained percentages: (container shape, raw, voxel-mask, trace-mask, total) = ("
+        f"{z_valid}, {x_valid}, {y_valid}), "
+        f"{raw_selection_pct:.2f}%, "
+        f"{voxel_mask_pct:.2f}%, "
+        f"{trace_mask_pct:.2f}%  --> "
+        f"{total_retained_pct:.2f}%"
     )

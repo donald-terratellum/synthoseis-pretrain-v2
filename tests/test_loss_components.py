@@ -1,6 +1,11 @@
 import torch
 
-from synthoseis_pre_train.losses import LPIPSLoss, MultiComponentLoss3D, compute_pmse_loss
+from synthoseis_pre_train.losses import (
+    LPIPSLoss,
+    MultiComponentLoss3D,
+    amplitude_calibration_loss,
+    compute_pmse_loss,
+)
 
 
 def test_compute_pmse_loss_finite_and_positive():
@@ -66,6 +71,37 @@ def test_multi_component_matches_weighted_mse_pmse_mae_without_lpips():
         mse_w * torch.nn.functional.mse_loss(recon, target)
         + pmse_w * compute_pmse_loss(recon, target)
         + mae_w * torch.nn.functional.l1_loss(recon, target)
+    )
+    actual = crit(recon, target)
+
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-5)
+
+
+def test_amplitude_calibration_loss_zero_for_identical_inputs():
+    x = torch.randn(2, 1, 8, 8, 8)
+    loss = amplitude_calibration_loss(x, x)
+    assert torch.allclose(loss, torch.zeros_like(loss), atol=1e-7, rtol=0)
+
+
+def test_multi_component_includes_lpips_calibration_term_when_enabled():
+    recon = torch.randn(2, 1, 10, 10, 10)
+    target = torch.randn(2, 1, 10, 10, 10)
+
+    mse_w, pmse_w, mae_w = 0.2, 0.6, 0.2
+    calib_w = 0.3
+    crit = MultiComponentLoss3D(
+        mse_weight=mse_w,
+        pmse_weight=pmse_w,
+        mae_weight=mae_w,
+        lpips_weight=0.0,
+        lpips_calib_weight=calib_w,
+    )
+
+    expected = (
+        mse_w * torch.nn.functional.mse_loss(recon, target)
+        + pmse_w * compute_pmse_loss(recon, target)
+        + mae_w * torch.nn.functional.l1_loss(recon, target)
+        + calib_w * amplitude_calibration_loss(recon, target)
     )
     actual = crit(recon, target)
 

@@ -69,6 +69,7 @@ def _build_criterion(args) -> nn.Module:
             pmse_weight=float(getattr(args, "mc_pmse_weight", 0.6)),
             mae_weight=float(getattr(args, "mc_mae_weight", 0.2)),
             lpips_weight=float(getattr(args, "mc_lpips_weight", 0.0)),
+            lpips_calib_weight=float(getattr(args, "mc_lpips_calib_weight", 0.0)),
             lpips_net=str(getattr(args, "mc_lpips_net", "alex")),
             pmse_eps=float(getattr(args, "mc_pmse_eps", 1e-8)),
             tv_weight=float(getattr(args, "mc_tv_weight", 0.0)),
@@ -169,13 +170,15 @@ def _print_loss_and_backprop_summary(
         _pmse = float(getattr(args, "mc_pmse_weight", 0.6))
         _mae = float(getattr(args, "mc_mae_weight", 0.2))
         _lpips = float(getattr(args, "mc_lpips_weight", 0.0))
+        _lpips_calib = float(getattr(args, "mc_lpips_calib_weight", 0.0))
         _lpips_net = str(getattr(args, "mc_lpips_net", "alex"))
         _pmse_eps = float(getattr(args, "mc_pmse_eps", 1e-8))
         _tv = float(getattr(args, "mc_tv_weight", 0.0))
         _gdl = float(getattr(args, "mc_gdl_weight", 0.0))
         print(
             f"{' ':4}{' ':<{label_width}}   - "
-            f"weights(mse={_mse:g}, pmse={_pmse:g}, mae={_mae:g}, lpips={_lpips:g}, tv={_tv:g}, gdl={_gdl:g})"
+            f"weights(mse={_mse:g}, pmse={_pmse:g}, mae={_mae:g}, lpips={_lpips:g}, "
+            f"lpips_calib={_lpips_calib:g}, tv={_tv:g}, gdl={_gdl:g})"
         )
         print(
             f"{' ':4}{' ':<{label_width}}     "

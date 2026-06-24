@@ -391,6 +391,44 @@ def compute_pmse_loss(recon: torch.Tensor, target: torch.Tensor, eps: float = 1e
     return (mse_per_sample / target_energy).mean()
 
 
+def amplitude_calibration_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """Penalize global amplitude-statistics mismatch between prediction and target.
+
+    This term complements LPIPS by directly constraining first- and second-order
+    moments that LPIPS does not tightly enforce:
+    - mean alignment (offset/DC calibration)
+    - standard-deviation alignment (scale/gain calibration)
+
+    Args:
+        pred: Predicted tensor shaped [B, ...].
+        target: Target tensor with the same shape as ``pred``.
+        eps: Numerical stabilizer used in standard deviation.
+
+    Returns:
+        Scalar loss averaged over batch.
+    """
+    if pred.shape != target.shape:
+        raise ValueError("pred and target must have identical shape")
+    if pred.ndim < 2:
+        raise ValueError("expected batched tensors with shape [B, ...]")
+    if eps <= 0:
+        raise ValueError("eps must be > 0")
+
+    reduce_dims = tuple(range(1, pred.ndim))
+
+    pred_mean = pred.mean(dim=reduce_dims)
+    target_mean = target.mean(dim=reduce_dims)
+
+    pred_var = pred.var(dim=reduce_dims, unbiased=False)
+    target_var = target.var(dim=reduce_dims, unbiased=False)
+    pred_std = torch.sqrt(pred_var + float(eps))
+    target_std = torch.sqrt(target_var + float(eps))
+
+    mean_term = torch.abs(pred_mean - target_mean)
+    std_term = torch.abs(pred_std - target_std)
+    return (mean_term + std_term).mean()
+
+
 class LPIPSLoss(nn.Module):
     """Optional LPIPS wrapper with graceful fallback when lpips is unavailable."""
 
@@ -534,7 +572,8 @@ def gradient_difference_loss_3d(pred: torch.Tensor, target: torch.Tensor) -> tor
 class MultiComponentLoss3D(nn.Module):
     """Weighted composite loss for seismic reconstruction.
 
-    total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS
+        total = mse_w * MSE + pmse_w * PMSE + mae_w * MAE + lpips_w * LPIPS
+            + lpips_calib_w * AMP_CALIB
           + tv_w * TV + gdl_w * GDL
 
     TV  — Total Variation: penalises large gradients in the *prediction*
@@ -553,6 +592,7 @@ class MultiComponentLoss3D(nn.Module):
         pmse_weight: float = 0.6,
         mae_weight: float = 0.2,
         lpips_weight: float = 0.0,
+        lpips_calib_weight: float = 0.0,
         lpips_net: str = "alex",
         pmse_eps: float = 1e-8,
         tv_weight: float = 0.0,
@@ -565,6 +605,7 @@ class MultiComponentLoss3D(nn.Module):
             ("pmse_weight", pmse_weight),
             ("mae_weight", mae_weight),
             ("lpips_weight", lpips_weight),
+            ("lpips_calib_weight", lpips_calib_weight),
             ("tv_weight", tv_weight),
             ("gdl_weight", gdl_weight),
         ):
@@ -572,13 +613,14 @@ class MultiComponentLoss3D(nn.Module):
                 raise ValueError(f"{name} must be >= 0")
         if float(pmse_eps) <= 0:
             raise ValueError("pmse_eps must be > 0")
-        if float(mse_weight + pmse_weight + mae_weight + lpips_weight + tv_weight + gdl_weight) <= 0.0:
+        if float(mse_weight + pmse_weight + mae_weight + lpips_weight + lpips_calib_weight + tv_weight + gdl_weight) <= 0.0:
             raise ValueError("at least one multi-component loss weight must be > 0")
 
         self.mse_weight = float(mse_weight)
         self.pmse_weight = float(pmse_weight)
         self.mae_weight = float(mae_weight)
         self.lpips_weight = float(lpips_weight)
+        self.lpips_calib_weight = float(lpips_calib_weight)
         self.pmse_eps = float(pmse_eps)
         self.tv_weight = float(tv_weight)
         self.gdl_weight = float(gdl_weight)
@@ -599,6 +641,8 @@ class MultiComponentLoss3D(nn.Module):
             total = total + self.mae_weight * F.l1_loss(pred, target)
         if self.lpips_weight > 0.0:
             total = total + self.lpips_weight * self.lpips_loss(pred, target)
+        if self.lpips_calib_weight > 0.0:
+            total = total + self.lpips_calib_weight * amplitude_calibration_loss(pred, target)
         if self.tv_weight > 0.0:
             total = total + self.tv_weight * total_variation_3d(pred)
         if self.gdl_weight > 0.0:

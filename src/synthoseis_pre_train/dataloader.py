@@ -49,6 +49,7 @@ class SeismicDataset:
         geologic_candidate_probes: int = 24,
         geologic_dist_thresh_start: int = 96,
         geologic_dist_thresh_floor: int = 32,
+        epoch_samples: Optional[int] = None,
     ):
         """
         Args:
@@ -90,6 +91,7 @@ class SeismicDataset:
         self.geologic_candidate_probes = int(geologic_candidate_probes)
         self.geologic_dist_thresh_start = int(geologic_dist_thresh_start)
         self.geologic_dist_thresh_floor = int(geologic_dist_thresh_floor)
+        self.epoch_samples = int(epoch_samples) if epoch_samples is not None else None
         self._ranked_points_xyz: Optional[np.ndarray] = None
         self._ranked_point_scores: Optional[np.ndarray] = None
         self._fixed_val_center_xyz: Optional[Tuple[int, int, int]] = None
@@ -379,6 +381,8 @@ class SeismicDataset:
         if len(still_available) != len(self.available_cubes):
             self.available_cubes = still_available
 
+        if self.epoch_samples is not None:
+            return max(1, min(total, self.epoch_samples))
         return total
     
     def _apply_input_strategy(self, input_data: np.ndarray) -> np.ndarray:
@@ -503,6 +507,7 @@ def create_dataloader(
     pin_memory: bool = True,
     array_key: Optional[str] = None,
     array_keys: Optional[List[str]] = None,
+    shuffle: bool = True,
     **dataset_kwargs
 ):
     """
@@ -516,6 +521,7 @@ def create_dataloader(
         pin_memory: Whether to pin memory for CUDA
         array_key: Single specific 3D array key (legacy)
         array_keys: List of 3D array keys to randomly sample from
+        shuffle: Whether to shuffle indices in DataLoader
         **dataset_kwargs: Additional arguments for SeismicDataset
     
     Returns:
@@ -539,7 +545,7 @@ def create_dataloader(
     loader = TorchDataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=pin_memory
     )

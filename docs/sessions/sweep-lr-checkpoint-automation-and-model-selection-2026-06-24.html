@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary - Sweep LR/Checkpoint Automation and Model Selection (2026-06-24)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; margin: 2rem auto; max-width: 980px; line-height: 1.45; color: #1f2937; }
+    h1, h2, h3 { color: #111827; }
+    code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul { margin-top: 0.4rem; }
+    .muted { color: #6b7280; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: Sweep LR/Checkpoint Automation and Model Selection (2026-06-24)</h1>
+
+  <h2>Context and goals</h2>
+  <ul>
+    <li>Baseline used: latest existing session summary in <code>docs/sessions</code> dated <code>2026-06-14</code> (<code>masking-dataloader-loss-diagnostics-and-gdl-2026-06-14.*</code>).</li>
+    <li>Goal for this summary: scan commits and code changes since that baseline and capture what changed in training/sweep behavior, metrics reporting, and checkpoint curation tooling.</li>
+    <li>Scope includes both committed history and local workspace changes present during this session.</li>
+  </ul>
+
+  <h2>What was done</h2>
+  <ul>
+    <li>Added/expanded randomized sweep orchestration in <code>studies/run_random_training_sweep.py</code>: randomized sampling, CSV-backed dedup, LR-agnostic dedup fingerprint, and checkpoint pruning policy.</li>
+    <li>Extended training LR policies in <code>src/synthoseis_pre_train/pretrain.py</code>: LPIPS-triggered low-LR override and heuristic-regression LR backoff.</li>
+    <li>Extended component metrics CSV schema in <code>src/synthoseis_pre_train/pretrain.py</code>: new <code>lr</code> column after encoder depth profile plus legacy normalization migration.</li>
+    <li>Updated TensorBoard launch stdout to use <code>uv run tensorboard --logdir &lt;actual run dir&gt;</code>.</li>
+    <li>Added checkpoint curation scripts:</li>
+  </ul>
+  <ul>
+    <li><code>studies/copy_best_val_epoch.py</code>: copies selected top checkpoints to <code>best_val_epoch.pt</code>.</li>
+    <li><code>studies/prune_pt_in_best_val_folders.py</code>: prunes <code>.pt</code> files with keep policy for <code>best_val_epoch.pt</code>, <code>final_model.pt</code>, and epochs where <code>epoch % 5 == 0</code>; includes recoverable-space tally.</li>
+  </ul>
+  <ul>
+    <li>Added/updated tests: <code>test_random_sweep_dedup.py</code>, <code>test_checkpoint_storage_pruner.py</code>, <code>test_lr_policy.py</code>, <code>test_retained_percentage_stats.py</code>, <code>test_batch_size_defaults.py</code>.</li>
+  </ul>
+
+  <h2>How was it done</h2>
+  <ul>
+    <li>Established baseline by scanning <code>docs/sessions</code> and selecting the most recent date (<code>2026-06-14</code>).</li>
+    <li>Scanned commit history since baseline date and inspected current workspace deltas via git status/diff.</li>
+    <li>Verified key behavior with targeted code searches (LR override/backoff, CSV schema updates, TensorBoard message, dataloader constraints).</li>
+    <li>Parsed attached AO-ranked spreadsheet and checked checkpoint existence before building top-checkpoint list.</li>
+    <li>Validated scripts with compile checks and dry-run execution.</li>
+  </ul>
+
+  <h2>When was it done and by whom</h2>
+  <ul>
+    <li>Date window: <code>2026-06-21</code> to <code>2026-06-24</code>.</li>
+    <li>By: user (<code>donaldpg</code>) and GitHub Copilot (GPT-5.3-Codex).</li>
+  </ul>
+
+  <h2>Basic info (relevant commits, files involved)</h2>
+  <h3>Relevant commits since baseline summary date</h3>
+  <ul>
+    <li>Commit scan result during summary generation: no new commits found after <code>2026-06-14</code> for this branch window.</li>
+    <li>Most captured work currently appears in local modified/untracked workspace changes.</li>
+  </ul>
+
+  <h3>Key files involved</h3>
+  <ul>
+    <li>Core: <code>src/synthoseis_pre_train/pretrain.py</code>, <code>train_cli.py</code>, <code>src/synthoseis_pre_train/dataloader.py</code>, <code>src/synthoseis_pre_train/_dataset_manager.py</code>, <code>src/synthoseis_pre_train/models.py</code>, <code>src/synthoseis_pre_train/losses.py</code>, <code>src/synthoseis_pre_train/_criterion.py</code></li>
+    <li>Sweep/tooling: <code>studies/run_random_training_sweep.py</code>, <code>studies/copy_best_val_epoch.py</code>, <code>studies/prune_pt_in_best_val_folders.py</code></li>
+    <li>Tests: <code>tests/test_loss_components.py</code>, <code>tests/test_random_sweep_dedup.py</code>, <code>tests/test_checkpoint_storage_pruner.py</code>, <code>tests/test_lr_policy.py</code>, <code>tests/test_retained_percentage_stats.py</code>, <code>tests/test_batch_size_defaults.py</code></li>
+    <li>Other touched: <code>README.md</code>, <code>logs/</code>, <code>train_cli__experiments.sh</code></li>
+  </ul>
+
+  <h3>Notable verification outcomes</h3>
+  <ul>
+    <li><code>copy_best_val_epoch.py --dry-run</code> resolved all 10 target checkpoints.</li>
+    <li><code>prune_pt_in_best_val_folders.py</code> dry-run reports recoverable space in GB in the final summary line.</li>
+  </ul>
+
+  <h2>Next and/or future follow-up work suggestions</h2>
+  <ol>
+    <li>Commit and push in coherent slices (core sweep/LR/CSV + tests, then tooling/docs).</li>
+    <li>Add dedicated unit tests for prune utility keep/delete policy.</li>
+    <li>Add optional keep flags for <code>partial_latest.pt</code> and <code>final_model_raw.pt</code>.</li>
+    <li>Persist AO-ranked top-checkpoint selection into a versioned JSON artifact for reproducibility.</li>
+    <li>Run full test suite and one smoke train execution before merge.</li>
+  </ol>
+
+  <p class="muted">Generated on 2026-06-24.</p>
+</body>
+</html>

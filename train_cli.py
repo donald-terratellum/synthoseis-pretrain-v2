@@ -123,10 +123,37 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Deprecated compatibility flag; dataset discovery/pruning now happens only at epoch boundaries.")
     parser.add_argument("--output_dir", type=str, default="./checkpoints",
                        help="Output directory for checkpoints")
-    parser.add_argument("--batch_size", type=int, default=4,
-                       help="Batch size")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=None,
+        help=(
+            "Batch size. If omitted, the trainer selects 2 when the model has fewer than 14,000,000 "
+            "parameters and 1 otherwise."
+        ),
+    )
     parser.add_argument("--epochs", type=int, default=100,
                        help="Number of epochs")
+    parser.add_argument(
+        "--epoch_samples",
+        type=int,
+        default=None,
+        help=(
+            "Optional cap on logical samples per dataset epoch (before batching). "
+            "Useful to avoid very large sampler allocations on massive zarr volumes."
+        ),
+    )
+    parser.add_argument(
+        "--tb_image_epochs",
+        type=int,
+        nargs='*',
+        default=None,
+        help=(
+            "Optional epoch numbers (1-based) for TensorBoard image logging. "
+            "When omitted, images are logged every epoch. Scalars/metrics are always logged every epoch. "
+            "Example: --tb_image_epochs 1 5 8 9 10"
+        ),
+    )
     parser.add_argument("--lr", type=float, default=1e-4,
                        help="Learning rate")
     parser.add_argument("--lr_schedule", type=str, default="poly",
@@ -152,7 +179,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Loss function: mse (MSELoss), mae (L1Loss), mae_smooth (smoothed L1), huber (SmoothL1Loss), "
             "ssim (w1*(1-SSIM)+w2*MSE+w3*L1), sliding_stats (local moments/extrema), "
-            "smae (Smooth MAE, e*tanh(e/2), arXiv:2303.09935), or multi_component (weighted MSE+PMSE+MAE+optional LPIPS) "
+            "smae (Smooth MAE, e*tanh(e/2), arXiv:2303.09935), or multi_component (weighted MSE+PMSE+MAE+optional LPIPS+amplitude calibration) "
             "over 3D volumes (default: huber)"
         ),
     )
@@ -222,7 +249,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mc_mae_weight", type=float, default=0.2,
                        help="Weight for MAE term in --loss=multi_component (default: 0.2)")
     parser.add_argument("--mc_lpips_weight", type=float, default=0.0,
-                       help="Weight for LPIPS term in --loss=multi_component (default: 0.0)")
+                       help="Weight for LPIPS (perceptual) term in --loss=multi_component (default: 0.0). LPIPS alone does not constrain amplitude scale/offset; add --mc_lpips_calib_weight to enforce mean/std alignment when this weight dominates.")
+    parser.add_argument(
+        "--mc_lpips_calib_weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight for LPIPS amplitude calibration term in --loss=multi_component "
+            "(penalizes mean/std mismatch to keep amplitude scale and offset aligned; default: 0.0)"
+        ),
+    )
     parser.add_argument("--mc_lpips_net", type=str, default="alex",
                        choices=["alex", "vgg", "squeeze"],
                        help="LPIPS backbone for --loss=multi_component (default: alex)")
@@ -359,6 +395,7 @@ def main(argv: list[str] | None = None) -> None:
         "mc_pmse_weight": parser.get_default("mc_pmse_weight"),
         "mc_mae_weight": parser.get_default("mc_mae_weight"),
         "mc_lpips_weight": parser.get_default("mc_lpips_weight"),
+        "mc_lpips_calib_weight": parser.get_default("mc_lpips_calib_weight"),
         "mc_lpips_net": parser.get_default("mc_lpips_net"),
         "mc_pmse_eps": parser.get_default("mc_pmse_eps"),
         "mc_tv_weight": parser.get_default("mc_tv_weight"),

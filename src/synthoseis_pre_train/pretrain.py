@@ -33,7 +33,7 @@ from synthoseis_pre_train.gpu_utils import (
     autocast_context,
     create_grad_scaler,
 )
-from synthoseis_pre_train.models import create_model, _MAMBA_AVAILABLE
+from synthoseis_pre_train.models import create_model, _MAMBA_AVAILABLE, _resolve_encoder_stage_blocks
 from synthoseis_pre_train.models import report_masked_voxel_stats
 from synthoseis_pre_train._ema import ModelEMA
 from synthoseis_pre_train._checkpoint import _save_checkpoint
@@ -83,6 +83,7 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "mc_mae_weight": 0.2,
     "mc_lpips_weight": 0.0,
     "mc_lpips_net": "alex",
+    "mc_lpips_calib_weight": 0.0,
     "mc_pmse_eps": 1e-8,
     "mc_tv_weight": 0.0,
     "mc_gdl_weight": 0.0,
@@ -92,6 +93,7 @@ DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "grad_clip_norm": 1.0,
     "ema_decay": 0.999,
     "ema_update_every": 1,
+    "epoch_samples": None,
 }
 
 
@@ -103,6 +105,8 @@ _COMPONENT_METRIC_CSV_HEADERS = [
     "unet_levels",
     "hidden_dims (as a space-delimited string)",
     "kernel_schedule (as a space-delimited string)",
+    "encoder_depth_profile (profile - stage blocks)",
+    "lr",
     "model parameter count (in millions, for example 11,324,033 is shown as 11.32)",
     "mse_weight",
     "pmse_weight",
@@ -125,15 +129,29 @@ _COMPONENT_METRIC_CSV_HEADERS = [
 _LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV = [
     header
     for header in _COMPONENT_METRIC_CSV_HEADERS
-    if header not in ("tv_weight", "gdl_weight", "train gdl", "validation gdl")
+    if header not in (
+        "encoder_depth_profile (profile - stage blocks)",
+        "lr",
+        "tv_weight",
+        "gdl_weight",
+        "train gdl",
+        "validation gdl",
+    )
 ]
 _LEGACY_COMPONENT_METRIC_CSV_HEADERS = [
     header
     for header in _COMPONENT_METRIC_CSV_HEADERS
-    if header not in ("gdl_weight", "train gdl", "validation gdl")
+    if header not in ("encoder_depth_profile (profile - stage blocks)", "lr", "gdl_weight", "train gdl", "validation gdl")
 ]
 _LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT = [
-    header for header in _COMPONENT_METRIC_CSV_HEADERS if header not in ("train gdl", "validation gdl")
+    header
+    for header in _COMPONENT_METRIC_CSV_HEADERS
+    if header not in ("encoder_depth_profile (profile - stage blocks)", "lr", "train gdl", "validation gdl")
+]
+_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_LR = [
+    header
+    for header in _COMPONENT_METRIC_CSV_HEADERS
+    if header not in ("lr",)
 ]
 
 
@@ -204,12 +222,16 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
     expected_len = len(_COMPONENT_METRIC_CSV_HEADERS)
     legacy_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS)
     legacy_gdl_weight_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT)
+    legacy_no_lr_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_LR)
     normalized_rows: list[list[str]] = []
     rewrite_needed = split_text != raw_text
 
     header = _sanitize_component_metric_cells(parsed_rows[0])
     if header == _COMPONENT_METRIC_CSV_HEADERS:
         normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+    elif header == _LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_LR:
+        normalized_header = _COMPONENT_METRIC_CSV_HEADERS
+        rewrite_needed = True
     elif header == _LEGACY_COMPONENT_METRIC_CSV_HEADERS_WITH_GDL_WEIGHT:
         normalized_header = _COMPONENT_METRIC_CSV_HEADERS
         rewrite_needed = True
@@ -224,33 +246,46 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
     gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("gdl_weight")
     train_gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("train gdl")
     validation_gdl_idx = _COMPONENT_METRIC_CSV_HEADERS.index("validation gdl")
+    encoder_depth_profile_idx = _COMPONENT_METRIC_CSV_HEADERS.index("encoder_depth_profile (profile - stage blocks)")
+    lr_idx = _COMPONENT_METRIC_CSV_HEADERS.index("lr")
     legacy_no_tv_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV)
     for raw_row in parsed_rows[1:]:
         row = _sanitize_component_metric_cells(raw_row)
         if not any(cell.strip() for cell in row):
             rewrite_needed = True
             continue
-        if len(row) == legacy_no_tv_len:
+        if len(row) == legacy_no_lr_len:
+            # Rows from schema immediately before LR column was introduced.
+            row = row[:lr_idx] + [""] + row[lr_idx:]
+            rewrite_needed = True
+        elif len(row) == legacy_no_tv_len:
             # Oldest rows missing tv_weight, gdl_weight, train gdl, and validation gdl.
+            row = row[:encoder_depth_profile_idx] + [""] + row[encoder_depth_profile_idx:]
+            row = row[:lr_idx] + [""] + row[lr_idx:]
             row = row[:tv_idx] + ["0.000000", "0.000000"] + row[tv_idx:]
             row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
             row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
             rewrite_needed = True
         elif len(row) == legacy_len:
             # Rows with tv_weight but missing gdl_weight, train gdl, and validation gdl.
+            row = row[:encoder_depth_profile_idx] + [""] + row[encoder_depth_profile_idx:]
+            row = row[:lr_idx] + [""] + row[lr_idx:]
             row = row[:gdl_idx] + ["0.000000"] + row[gdl_idx:]
             row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
             row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
             rewrite_needed = True
         elif len(row) == legacy_gdl_weight_len:
             # Rows with gdl_weight but missing train/validation gdl metric columns.
+            row = row[:encoder_depth_profile_idx] + [""] + row[encoder_depth_profile_idx:]
+            row = row[:lr_idx] + [""] + row[lr_idx:]
             row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
             row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
             rewrite_needed = True
         elif len(row) != expected_len:
             raise ValueError(
                 f"Unexpected component metrics CSV row width in {csv_path}: "
-                f"expected {expected_len}, {legacy_len}, or {legacy_gdl_weight_len} columns, got {len(row)}"
+                f"expected {expected_len}, {legacy_no_lr_len}, {legacy_len}, "
+                f"or {legacy_gdl_weight_len} columns, got {len(row)}"
             )
         normalized_rows.append(row)
 
@@ -269,6 +304,7 @@ def _append_component_metrics_csv_row(
     epoch: int,
     args,
     n_params: int,
+    lr: float,
     train_metrics: dict[str, float],
     val_metrics: dict[str, float],
 ) -> None:
@@ -279,6 +315,15 @@ def _append_component_metrics_csv_row(
     else:
         kernel_schedule_vals = [int(v) for v in tuple(args.kernel_sizes)]
     kernel_schedule_str = " ".join(str(v) for v in kernel_schedule_vals)
+    encoder_stage_blocks = _resolve_encoder_stage_blocks(
+        int(args.unet_levels),
+        tuple(args.encoder_stage_blocks) if getattr(args, "encoder_stage_blocks", None) is not None else None,
+        str(getattr(args, "encoder_depth_profile", "baseline")),
+    )
+    encoder_depth_profile_str = (
+        f"{str(getattr(args, 'encoder_depth_profile', 'baseline'))} - "
+        f"{' '.join(str(int(v)) for v in encoder_stage_blocks)}"
+    )
 
     row = [
         now.strftime("%Y-%m-%d"),
@@ -288,6 +333,8 @@ def _append_component_metrics_csv_row(
         str(int(args.unet_levels)),
         hidden_dims_str,
         kernel_schedule_str,
+        encoder_depth_profile_str,
+        f"{float(lr):.8e}",
         f"{(float(n_params) / 1_000_000.0):.2f}",
         f"{float(getattr(args, 'mc_mse_weight', 0.0)):.6f}",
         f"{float(getattr(args, 'mc_pmse_weight', 0.0)):.6f}",
@@ -315,6 +362,39 @@ def _append_component_metrics_csv_row(
         if write_header:
             writer.writerow(_sanitize_component_metric_cells(_COMPONENT_METRIC_CSV_HEADERS))
         writer.writerow(_sanitize_component_metric_cells(row))
+
+
+def _default_batch_size_for_model(n_params: int) -> int:
+    return 2 if int(n_params) < 14_000_000 else 1
+
+
+def _fixed_validation_heuristic(val_metrics: dict[str, float]) -> float:
+    return (
+        2.0 * float(val_metrics.get("mae", float("nan")))
+        + float(val_metrics.get("mse", float("nan")))
+        + float(val_metrics.get("lpips", float("nan")))
+    )
+
+
+def _scale_optimizer_lr(
+    optimizer: optim.Optimizer,
+    scale: float,
+    scheduler=None,
+) -> tuple[float, float]:
+    """Scale current optimizer LR and scheduler base LRs by a constant factor."""
+    factor = float(scale)
+    if factor <= 0.0:
+        raise ValueError("LR scale factor must be > 0")
+
+    old_lr = float(optimizer.param_groups[0]["lr"])
+    for group in optimizer.param_groups:
+        group["lr"] = float(group["lr"]) * factor
+    new_lr = float(optimizer.param_groups[0]["lr"])
+
+    if scheduler is not None and hasattr(scheduler, "base_lrs"):
+        scheduler.base_lrs = [float(v) * factor for v in scheduler.base_lrs]
+
+    return old_lr, new_lr
 
 
 def run_training(config: dict[str, Any]) -> None:
@@ -372,6 +452,7 @@ def train_epoch(
     max_batches: int | None = None,
     return_details: bool = False,
     reporting_lpips: nn.Module | None = None,
+    log_image_this_epoch: bool = True,
 ) -> float | dict[str, float | int | bool]:
     """
     Train for one epoch using a single merged train DataLoader.
@@ -450,7 +531,7 @@ def train_epoch(
             # loss = criterion(output[~mask], target[~mask])
             loss = criterion(output, target)  # TODO: switch to masked loss when stable ?
         if batch_idx < 10:
-            report_masked_voxel_stats(input_data)
+            report_masked_voxel_stats(input_data, target=target, mask=mask)
         batch_loss = loss.item()
         scaled_loss = loss / accum_steps
 
@@ -534,6 +615,8 @@ def train_epoch(
             )
 
     if (
+        bool(log_image_this_epoch)
+        and
         writer is not None
         and last_input is not None
         and last_output is not None
@@ -576,6 +659,7 @@ def validate(
     max_batches: int | None = None,
     return_details: bool = False,
     reporting_lpips: nn.Module | None = None,
+    log_image_this_epoch: bool = True,
 ) -> float | dict[str, float]:
     """
     Validate the model across all validation datasets.
@@ -648,6 +732,8 @@ def validate(
             # Tags are structured so TensorBoard shows paired input/output
             # under the same group for each slice direction.
             if (
+                bool(log_image_this_epoch)
+                and
                 writer is not None
                 and first_input is not None
                 and first_output is not None
@@ -724,6 +810,16 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             "--hidden_dims length must match --unet_levels "
             f"(got hidden_dims={tuple(args.hidden_dims)}, unet_levels={args.unet_levels})"
         )
+    if float(getattr(args, "mc_lpips_weight", 0.0)) > 0.0:
+        forced_lr = 1.0e-5
+        forced_lr_min = 5.0e-6
+        if float(getattr(args, "lr", forced_lr)) != forced_lr or float(getattr(args, "lr_min", forced_lr_min)) != forced_lr_min:
+            print(
+                "LPIPS weight > 0 detected; overriding LR settings to "
+                f"lr={forced_lr:.1e}, lr_min={forced_lr_min:.1e}"
+            )
+        args.lr = forced_lr
+        args.lr_min = forced_lr_min
     if getattr(args, "encoder_stage_blocks", None) is not None:
         if len(tuple(args.encoder_stage_blocks)) != int(args.unet_levels):
             _config_error(
@@ -777,12 +873,44 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     if sum(float(v) for v in args.mae_smooth_kernel_weights) <= 0:
         _config_error("--mae_smooth_kernel_weights must sum to > 0")
     if args.loss == "multi_component":
-        if min(args.mc_mse_weight, args.mc_pmse_weight, args.mc_mae_weight, args.mc_lpips_weight, args.mc_tv_weight, getattr(args, "mc_gdl_weight", 0.0)) < 0:
-            _config_error("--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, --mc_tv_weight, and --mc_gdl_weight must be >= 0")
-        if (args.mc_mse_weight + args.mc_pmse_weight + args.mc_mae_weight + args.mc_lpips_weight + args.mc_tv_weight + getattr(args, "mc_gdl_weight", 0.0)) <= 0:
-            _config_error("At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, --mc_tv_weight, or --mc_gdl_weight must be > 0")
+        if min(
+            args.mc_mse_weight,
+            args.mc_pmse_weight,
+            args.mc_mae_weight,
+            args.mc_lpips_weight,
+            getattr(args, "mc_lpips_calib_weight", 0.0),
+            args.mc_tv_weight,
+            getattr(args, "mc_gdl_weight", 0.0),
+        ) < 0:
+            _config_error(
+                "--mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, --mc_lpips_weight, "
+                "--mc_lpips_calib_weight, --mc_tv_weight, and --mc_gdl_weight must be >= 0"
+            )
+        if (
+            args.mc_mse_weight
+            + args.mc_pmse_weight
+            + args.mc_mae_weight
+            + args.mc_lpips_weight
+            + getattr(args, "mc_lpips_calib_weight", 0.0)
+            + args.mc_tv_weight
+            + getattr(args, "mc_gdl_weight", 0.0)
+        ) <= 0:
+            _config_error(
+                "At least one of --mc_mse_weight, --mc_pmse_weight, --mc_mae_weight, "
+                "--mc_lpips_weight, --mc_lpips_calib_weight, --mc_tv_weight, or --mc_gdl_weight must be > 0"
+            )
         if args.mc_pmse_eps <= 0:
             _config_error("--mc_pmse_eps must be > 0")
+    if args.tb_image_epochs is not None:
+        if any(int(v) <= 0 for v in args.tb_image_epochs):
+            _config_error("--tb_image_epochs values must be positive epoch numbers (1-based)")
+
+    tb_image_epochs_set: set[int] | None = None
+    if args.tb_image_epochs is not None:
+        tb_image_epochs_set = {int(v) for v in args.tb_image_epochs}
+        print(f"TensorBoard image epochs (1-based): {sorted(tb_image_epochs_set)}")
+    else:
+        print("TensorBoard image epochs (1-based): all")
 
     if not args.data_paths and not args.data_folder:
         _config_error("At least one of --data_paths or --data_folder must be provided")
@@ -1013,7 +1141,15 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     while _total(safe_max_bs + 1) < safe_limit:
         safe_max_bs += 1
 
-    requested_batch_size = max(1, int(args.batch_size))
+    requested_batch_size_raw = getattr(args, "batch_size", None)
+    if requested_batch_size_raw is None:
+        requested_batch_size = _default_batch_size_for_model(n_params)
+        print(
+            f"Default batch size selected from model size ({n_params:,} params): {requested_batch_size}"
+        )
+    else:
+        requested_batch_size = max(1, int(requested_batch_size_raw))
+
     if requested_batch_size > safe_max_bs:
         print(
             f"WARNING: requested batch size {requested_batch_size} exceeds estimated safe max "
@@ -1051,6 +1187,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         sample_shape=tuple(args.sample_shape),
         num_workers=_num_workers,
         pin_memory=(device.type == "cuda"),
+        epoch_samples=(int(args.epoch_samples) if getattr(args, "epoch_samples", None) is not None else None),
         normalize=True,
         target_std=1.0,
         trace_mask_ratio=0.07,
@@ -1100,7 +1237,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     tb_log_dir = output_dir / "runs"
     writer = SummaryWriter(log_dir=str(tb_log_dir))
     print(f"TensorBoard logs: {tb_log_dir}")
-    print("  Launch viewer: tensorboard --logdir checkpoints/runs")
+    print(f"  Launch viewer: uv run tensorboard --logdir {tb_log_dir}")
 
     start_epoch = 0
     if args.resume:
@@ -1140,6 +1277,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
 
     print("\nStarting training...")
     training_start = time.monotonic()
+    prev_val_heuristic: float | None = None
     for epoch in range(start_epoch, args.epochs):
         epoch_start = time.monotonic()
         current_lr = optimizer.param_groups[0]["lr"]
@@ -1227,6 +1365,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 ema_update_every=args.ema_update_every,
                 return_details=True,
                 reporting_lpips=reporting_lpips,
+                log_image_this_epoch=(tb_image_epochs_set is None or (epoch + 1) in tb_image_epochs_set),
             )
             if not isinstance(train_details, dict):
                 raise RuntimeError("train_epoch(return_details=True) returned non-dict details")
@@ -1280,6 +1419,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                     max_batches=remaining,
                     return_details=True,
                     reporting_lpips=reporting_lpips,
+                    log_image_this_epoch=(tb_image_epochs_set is None or (epoch + 1) in tb_image_epochs_set),
                 )
                 if not isinstance(details, dict):
                     raise RuntimeError("train_epoch(return_details=True) returned non-dict details")
@@ -1310,7 +1450,11 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 "gdl": float(weighted_gdl_sum / max(1, batches_done)),
             }
 
-        if writer is not None and train_loader is not None:
+        if (
+            writer is not None
+            and train_loader is not None
+            and (tb_image_epochs_set is None or (epoch + 1) in tb_image_epochs_set)
+        ):
             _log_per_dataset_figures(
                 model, train_loader, device, writer, epoch, train_loss
             )
@@ -1325,6 +1469,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             max_batches=args.val_batches_per_epoch,
             return_details=True,
             reporting_lpips=reporting_lpips,
+            log_image_this_epoch=(tb_image_epochs_set is None or (epoch + 1) in tb_image_epochs_set),
         )
         if not isinstance(val_details, dict):
             raise RuntimeError("validate(return_details=True) returned non-dict details")
@@ -1361,6 +1506,19 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f}, gdl={val_metrics['gdl']:.6f})"
             )
 
+        val_heuristic = _fixed_validation_heuristic(val_metrics)
+        heuristic_increased = False
+        if math.isfinite(val_heuristic):
+            writer.add_scalar("heuristic/val_fixed", float(val_heuristic), global_step=epoch + 1)
+            print(f"Validation fixed heuristic (2*mae + mse + lpips): {val_heuristic:.8f}")
+            if prev_val_heuristic is not None and math.isfinite(prev_val_heuristic) and val_heuristic > prev_val_heuristic:
+                heuristic_increased = True
+                print(
+                    "Validation fixed heuristic increased "
+                    f"({prev_val_heuristic:.8f} -> {val_heuristic:.8f}); scheduling LR halving."
+                )
+            prev_val_heuristic = val_heuristic
+
         if (epoch + 1) % 1 == 0:
             csv_path = Path("/Users/donaldpg/synthoseis-pretrain-v2/checkpoints/epoch_component_metrics.csv")
             _append_component_metrics_csv_row(
@@ -1369,6 +1527,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 epoch=epoch + 1,
                 args=args,
                 n_params=n_params,
+                lr=current_lr,
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
             )
@@ -1384,6 +1543,10 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
 
         if scheduler is not None:
             scheduler.step()
+
+        if heuristic_increased:
+            old_lr, new_lr = _scale_optimizer_lr(optimizer, scale=0.5, scheduler=scheduler)
+            print(f"Applied LR backoff x0.5 due to heuristic regression: {old_lr:.3e} -> {new_lr:.3e}")
 
         # --- timing ---
         now = time.monotonic()
