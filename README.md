@@ -235,6 +235,7 @@ Use `--loss multi_component` to blend reconstruction terms:
 - `--mc_pmse_weight` (default `0.6`)
 - `--mc_mae_weight` (default `0.2`)
 - `--mc_lpips_weight` (default `0.0`)
+- `--mc_lpips_calib_weight` (default `0.0`; **LPIPS amplitude calibration** — penalises per-sample mean and std-deviation mismatch between prediction and target. Use alongside `--mc_lpips_weight` to prevent LPIPS-dominant training from drifting the predicted amplitude scale/offset. Recommended range: `0.03`–`0.10`.)
 - `--mc_tv_weight` (default `0.0`; Total Variation regulariser to reduce blocky/checkerboard artifacts)
 - `--mc_gdl_weight` (default `0.0`; Gradient Difference Loss — penalises differences in spatial gradient magnitude between prediction and target. Unlike TV, GDL preserves real geological edges while suppressing vertical stripe artifacts caused by zeroed trace-cluster masking. Recommended range: `0.05`–`0.2`.)
 - `--mc_lpips_net` (`alex|vgg|squeeze`, default `alex`)
@@ -244,6 +245,26 @@ TV-weight tuning guidance:
 - Start with `--mc_tv_weight 1e-4`.
 - If outputs are still blocky, increase to `3e-4`.
 - If needed, increase further to `1e-3`.
+
+LPIPS amplitude calibration guidance:
+
+LPIPS is relatively insensitive to global amplitude shift/scale, so a training
+run with `--mc_lpips_weight` as the dominant term will commonly exhibit:
+- Predicted mean far from zero (non-zero DC offset)
+- Predicted std-deviation under/over-shooting the target
+- Visible distortions along volume boundaries
+
+`--mc_lpips_calib_weight` directly penalises both effects by computing
+`mean(|pred_mean - target_mean| + |pred_std - target_std|)` per sample.
+Because your seismic data is normalised to zero mean and std≈1, this is
+mathematically equivalent to a least-squares affine calibration penalty
+(scale + offset) but without the numerical instability that arises when
+dividing by predicted variance during model collapse.
+
+Recommended starting points:
+- LPIPS-light (`lpips≈0.1`): `--mc_lpips_calib_weight 0.03`
+- LPIPS-heavy (`lpips≈0.5`–`0.9`): `--mc_lpips_calib_weight 0.05`–`0.10`
+- LPIPS-dominant (`lpips≈0.99`, no MAE/MSE): `--mc_lpips_calib_weight 0.10`–`0.20`
 
 Example:
 
@@ -255,6 +276,7 @@ uv run python train_cli.py \
   --mc_pmse_weight 0.6 \
   --mc_mae_weight 0.2 \
   --mc_lpips_weight 0.0 \
+  --mc_lpips_calib_weight 0.0 \
   --mc_tv_weight 1e-4 \
   --mc_lpips_net alex \
   --mc_pmse_eps 1e-8 \
@@ -312,6 +334,7 @@ of at least `2` voxels per axis.
 3. `--loss multi_component` with all `--mc_*_weight` values set to `0`.
 4. Negative `--mc_*_weight` values or non-positive `--mc_pmse_eps`.
 5. `--mc_lpips_weight > 0` without `lpips` installed in the active environment.
+6. `--mc_lpips_calib_weight > 0` with no amplitude-calibrating loss (MAE/MSE/PMSE all zero) and `--mc_lpips_weight 0`: in that case the term is the *only* objective, which works but gives no perceptual texture guidance — usually combine with at least one of MAE or LPIPS.
 
 Quick check command:
 
