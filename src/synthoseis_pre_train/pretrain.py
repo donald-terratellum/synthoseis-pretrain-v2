@@ -36,7 +36,7 @@ from synthoseis_pre_train.gpu_utils import (
 from synthoseis_pre_train.models import create_model, _MAMBA_AVAILABLE, _resolve_encoder_stage_blocks
 from synthoseis_pre_train.models import report_masked_voxel_stats
 from synthoseis_pre_train._ema import ModelEMA
-from synthoseis_pre_train._checkpoint import _save_checkpoint
+from synthoseis_pre_train._checkpoint import _maybe_update_best_val_checkpoint, _save_checkpoint
 from synthoseis_pre_train._scheduler import _build_lr_scheduler
 from synthoseis_pre_train._criterion import _build_criterion, _print_loss_and_backprop_summary
 from synthoseis_pre_train._dataset_manager import (
@@ -1540,6 +1540,20 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                          train_paths=train_paths, val_paths=val_paths,
                          ema_state=ema.state_dict() if ema is not None else None)
         print(f"Saved checkpoint: {epoch_ckpt}")
+
+        if _maybe_update_best_val_checkpoint(
+            output_dir=output_dir,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            epoch=epoch,
+            train_loss=train_loss,
+            val_loss=val_loss,
+            train_paths=train_paths,
+            val_paths=val_paths,
+            ema_state=ema.state_dict() if ema is not None else None,
+        ):
+            print(f"Updated best validation checkpoint: {output_dir / 'best_val_epoch.pt'}")
 
         if scheduler is not None:
             scheduler.step()
