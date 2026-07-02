@@ -42,6 +42,65 @@ def test_main_forwards_normalized_paths(tmp_path: Path, monkeypatch):
     assert captured["args"]["data_paths"] == [str(dataset)]
 
 
+def test_normalize_real_data_paths_expands_folder(tmp_path: Path):
+    root = tmp_path / "real_data"
+    zarr_ds = root / "seismic__100" / "model_data.zarr"
+    npy_ds = root / "cube001.npy"
+    zarr_ds.mkdir(parents=True)
+    npy_ds.write_bytes(b"dummy")
+
+    normalized = train_cli._normalize_real_data_paths([str(root)], "seismic__*/model_data.zarr")
+
+    assert str(zarr_ds) in normalized
+    assert str(npy_ds) in normalized
+
+
+def test_main_forwards_normalized_real_paths(tmp_path: Path, monkeypatch):
+    train_root = tmp_path / "real_data"
+    test_root = tmp_path / "test_data"
+    train_zarr = train_root / "seismic__001" / "model_data.zarr"
+    test_zarr = test_root / "seismic__999" / "model_data.zarr"
+    train_zarr.mkdir(parents=True)
+    test_zarr.mkdir(parents=True)
+
+    captured: dict = {}
+
+    def _fake_run_training(config: dict) -> None:
+        captured.update(config)
+
+    monkeypatch.setattr(train_cli, "run_training", _fake_run_training)
+
+    train_cli.main(
+        [
+            "--data_paths",
+            str(train_zarr),
+            "--real_train_paths",
+            str(train_root),
+            "--real_test_paths",
+            str(test_root),
+            "--epochs",
+            "1",
+        ]
+    )
+
+    assert str(train_zarr) in captured["args"]["real_train_paths"]
+    assert str(test_zarr) in captured["args"]["real_test_paths"]
+
+
+def test_normalize_real_data_paths_excludes_internal_real_zarr_cache(tmp_path: Path):
+    root = tmp_path / "real_data"
+    keep_npy = root / "cubeA.npy"
+    skip_cache = root / "cubeA.real.zarr"
+    keep_npy.parent.mkdir(parents=True, exist_ok=True)
+    keep_npy.write_bytes(b"dummy")
+    skip_cache.mkdir(parents=True)
+
+    normalized = train_cli._normalize_real_data_paths([str(root)], "seismic__*/model_data.zarr")
+
+    assert str(keep_npy) in normalized
+    assert str(skip_cache) not in normalized
+
+
 def test_parser_defaults_for_multi_component_and_unet_levels():
     parser = train_cli._build_parser()
     args = parser.parse_args(["--data_paths", "dummy.zarr"])
@@ -59,6 +118,7 @@ def test_parser_defaults_for_multi_component_and_unet_levels():
     assert args.input_extrema_prob == 1.0
     assert args.input_sparse_keep_prob == 0.0
     assert args.input_decimate_trilinear_prob == 0.0
+    assert args.test_batches_per_epoch is None
 
 
 def test_parser_accepts_multi_component_and_custom_unet_levels():
@@ -111,3 +171,15 @@ def test_parser_accepts_multi_component_and_custom_unet_levels():
     assert tuple(args.hidden_dims) == (16, 32, 64, 128, 256)
     assert args.encoder_depth_profile == "deeper"
     assert tuple(args.encoder_stage_blocks) == (3, 4, 8, 4, 3)
+
+
+def test_parser_accepts_test_batches_per_epoch():
+    parser = train_cli._build_parser()
+    args = parser.parse_args([
+        "--data_paths",
+        "dummy.zarr",
+        "--test_batches_per_epoch",
+        "40",
+    ])
+
+    assert args.test_batches_per_epoch == 40

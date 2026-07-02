@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -12,6 +13,15 @@ import torch.nn as nn
 from synthoseis_pre_train._checkpoint import _format_elapsed_dhm
 from synthoseis_pre_train._thermal import ThermalGuard
 from synthoseis_pre_train.gpu_utils import autocast_context
+
+
+def _ensure_5d_batch(t: torch.Tensor, name: str) -> torch.Tensor:
+    """Normalize batch tensors to (B, C, D, H, W)."""
+    if t.ndim == 4:
+        t = t.unsqueeze(1)
+    elif t.ndim != 5:
+        raise ValueError(f"Expected 4D/5D tensor for {name}, got shape={tuple(t.shape)}")
+    return t
 
 
 @dataclass
@@ -50,7 +60,18 @@ def _prepare_validation_dataset(
         print(f"\n  WARNING: skipping val dataset {ds_name} — 0 available batches")
         return None
 
-    keys_str = ", ".join(loader.dataset.available_cubes)
+    dataset_obj = loader.dataset
+    available_cubes = getattr(dataset_obj, "available_cubes", None)
+    if isinstance(available_cubes, (list, tuple)) and len(available_cubes) > 0:
+        keys_str = ", ".join(str(k) for k in available_cubes)
+    else:
+        data_path = getattr(dataset_obj, "data_path", None)
+        if data_path is None:
+            data_path = getattr(dataset_obj, "_path", None)
+        if data_path is not None:
+            keys_str = Path(str(data_path)).stem
+        else:
+            keys_str = type(dataset_obj).__name__
     print(f"\n  Val dataset {ds_name}, {keys_str} [{ds_idx + 1}/{total_datasets}]")
     return target_ds_batches
 
@@ -81,9 +102,9 @@ def _run_validation_dataset(
                 input_data, target, mask = next(loader_iter)
             except StopIteration:
                 break
-            input_data = input_data.unsqueeze(1).float().to(device, non_blocking=True)
-            target = target.unsqueeze(1).float().to(device, non_blocking=True)
-            mask = mask.unsqueeze(1).to(device, non_blocking=True)
+            input_data = _ensure_5d_batch(input_data, "input_data").float().to(device, non_blocking=True)
+            target = _ensure_5d_batch(target, "target").float().to(device, non_blocking=True)
+            mask = _ensure_5d_batch(mask, "mask").to(device, non_blocking=True)
 
             with autocast_context(device):
                 output = model(input_data)

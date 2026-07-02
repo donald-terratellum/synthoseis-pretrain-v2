@@ -47,6 +47,7 @@ from synthoseis_pre_train._dataset_manager import (
     _resolve_target_counts,
     _build_loaders,
 )
+from synthoseis_pre_train._npy_dataset import NpySeismicDataset as _NpySeismicDataset  # noqa: F401
 from synthoseis_pre_train._thermal import ThermalGuard, _print_thermal_monitor_status
 from synthoseis_pre_train._dataset_figures import _log_per_dataset_figures
 from synthoseis_pre_train._validation_figures import _log_validation_crosssections
@@ -124,6 +125,11 @@ _COMPONENT_METRIC_CSV_HEADERS = [
     "validation mae/L1",
     "validation LPIPS",
     "validation gdl",
+    "test mse",
+    "test pmse",
+    "test mae/L1",
+    "test LPIPS",
+    "test gdl",
 ]
 
 _LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV = [
@@ -152,6 +158,13 @@ _LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_LR = [
     header
     for header in _COMPONENT_METRIC_CSV_HEADERS
     if header not in ("lr",)
+]
+
+# Headers without the 5 test columns (all runs before real-data test support).
+_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TEST = [
+    header
+    for header in _COMPONENT_METRIC_CSV_HEADERS
+    if header not in ("test mse", "test pmse", "test mae/L1", "test LPIPS", "test gdl")
 ]
 
 
@@ -249,6 +262,7 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
     encoder_depth_profile_idx = _COMPONENT_METRIC_CSV_HEADERS.index("encoder_depth_profile (profile - stage blocks)")
     lr_idx = _COMPONENT_METRIC_CSV_HEADERS.index("lr")
     legacy_no_tv_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TV)
+    legacy_no_test_len = len(_LEGACY_COMPONENT_METRIC_CSV_HEADERS_NO_TEST)
     for raw_row in parsed_rows[1:]:
         row = _sanitize_component_metric_cells(raw_row)
         if not any(cell.strip() for cell in row):
@@ -281,11 +295,15 @@ def _normalize_existing_component_metrics_csv(csv_path: Path) -> None:
             row = row[:train_gdl_idx] + ["0.000000"] + row[train_gdl_idx:]
             row = row[:validation_gdl_idx] + ["0.000000"] + row[validation_gdl_idx:]
             rewrite_needed = True
+        elif len(row) == legacy_no_test_len:
+            # Rows from before real-data test columns were introduced.
+            row = row + ["", "", "", "", ""]
+            rewrite_needed = True
         elif len(row) != expected_len:
             raise ValueError(
                 f"Unexpected component metrics CSV row width in {csv_path}: "
                 f"expected {expected_len}, {legacy_no_lr_len}, {legacy_len}, "
-                f"or {legacy_gdl_weight_len} columns, got {len(row)}"
+                f"{legacy_gdl_weight_len}, or {legacy_no_test_len} columns, got {len(row)}"
             )
         normalized_rows.append(row)
 
@@ -307,6 +325,7 @@ def _append_component_metrics_csv_row(
     lr: float,
     train_metrics: dict[str, float],
     val_metrics: dict[str, float],
+    test_metrics: dict[str, float] | None = None,
 ) -> None:
     now = datetime.now()
     hidden_dims_str = " ".join(str(int(v)) for v in tuple(args.hidden_dims))
@@ -352,6 +371,12 @@ def _append_component_metrics_csv_row(
         f"{float(val_metrics.get('mae', float('nan'))):.8f}",
         f"{float(val_metrics.get('lpips', float('nan'))):.8f}",
         f"{float(val_metrics.get('gdl', float('nan'))):.8f}",
+        # test columns — empty string when no test data was evaluated this run.
+        f"{float(test_metrics.get('mse', float('nan'))):.8f}" if test_metrics else "",
+        f"{float(test_metrics.get('pmse', float('nan'))):.8f}" if test_metrics else "",
+        f"{float(test_metrics.get('mae', float('nan'))):.8f}" if test_metrics else "",
+        f"{float(test_metrics.get('lpips', float('nan'))):.8f}" if test_metrics else "",
+        f"{float(test_metrics.get('gdl', float('nan'))):.8f}" if test_metrics else "",
     ]
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,6 +547,7 @@ def train_epoch(
         input_data = fetch_result.input_data
         target = fetch_result.target
         mask = fetch_result.mask
+        source_tags = fetch_result.source_tags
         if input_data is None or target is None or mask is None:
             reload_requested = True
             break
@@ -531,7 +557,7 @@ def train_epoch(
             # loss = criterion(output[~mask], target[~mask])
             loss = criterion(output, target)  # TODO: switch to masked loss when stable ?
         if batch_idx < 10:
-            report_masked_voxel_stats(input_data, target=target, mask=mask)
+            report_masked_voxel_stats(input_data, target=target, mask=mask, source_tags=source_tags)
         batch_loss = loss.item()
         scaled_loss = loss / accum_steps
 
@@ -794,6 +820,8 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         _config_error("--train_batches_per_epoch must be > 0")
     if args.val_batches_per_epoch is not None and args.val_batches_per_epoch <= 0:
         _config_error("--val_batches_per_epoch must be > 0")
+    if args.test_batches_per_epoch is not None and args.test_batches_per_epoch <= 0:
+        _config_error("--test_batches_per_epoch must be > 0")
     if args.refresh_every_batches < 0:
         _config_error("--refresh_every_batches must be >= 0")
     if args.kernel_sizes is not None:
@@ -1272,6 +1300,8 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         print("    train: all batches from merged train loader")
     if args.val_batches_per_epoch is not None:
         print(f"    val: fixed {args.val_batches_per_epoch} batches")
+    if args.test_batches_per_epoch is not None:
+        print(f"    test: fixed {args.test_batches_per_epoch} batches")
     else:
         print("    val: all batches from val loaders")
 
@@ -1341,14 +1371,19 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             print(f"  Val:   {[Path(p).parent.name for p in active_val]}")
         train_loader = None
         val_loaders = []
+        test_loaders: list[tuple[str, DataLoader]] = []
 
         if args.train_batches_per_epoch is None:
-            train_loader, val_loaders = _build_loaders(
+            train_loader, val_loaders, test_loaders = _build_loaders(
                 active_train,
                 active_val,
                 loader_kwargs,
                 train_batches_per_epoch=args.train_batches_per_epoch,
                 val_batches_per_epoch=args.val_batches_per_epoch,
+                test_batches_per_epoch=args.test_batches_per_epoch,
+                real_train_paths=list(getattr(args, "real_train_paths", None) or []),
+                real_test_paths=list(getattr(args, "real_test_paths", None) or []),
+                real_epoch_samples=getattr(args, "real_epoch_samples", None),
             )
             if train_loader is None:
                 print("  WARNING: No usable training datasets this epoch; skipping.")
@@ -1390,12 +1425,16 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
 
             while batches_done < target_batches:
                 _reload_t0 = time.monotonic()
-                train_loader, val_loaders = _build_loaders(
+                train_loader, val_loaders, test_loaders = _build_loaders(
                     active_train,
                     active_val,
                     loader_kwargs,
                     train_batches_per_epoch=args.train_batches_per_epoch,
                     val_batches_per_epoch=args.val_batches_per_epoch,
+                    test_batches_per_epoch=args.test_batches_per_epoch,
+                    real_train_paths=list(getattr(args, "real_train_paths", None) or []),
+                    real_test_paths=list(getattr(args, "real_test_paths", None) or []),
+                    real_epoch_samples=getattr(args, "real_epoch_samples", None),
                 )
                 _reload_elapsed = time.monotonic() - _reload_t0
                 if pending_chunk_reload:
@@ -1484,11 +1523,33 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
         if using_ema:
             ema.restore(model)
 
+        # --- Test evaluation (real .npy datasets; no effect on LR or checkpoints) ---
+        test_metrics: dict[str, float] | None = None
+        if test_loaders:
+            test_details = validate(
+                model, test_loaders, criterion, device,
+                writer=writer, epoch=epoch, thermal_guard=None,
+                max_batches=args.test_batches_per_epoch,
+                return_details=True,
+                reporting_lpips=reporting_lpips,
+                log_image_this_epoch=(tb_image_epochs_set is None or (epoch + 1) in tb_image_epochs_set),
+            )
+            if isinstance(test_details, dict):
+                test_metrics = {
+                    "mse":  float(test_details["mse"]),
+                    "pmse": float(test_details["pmse"]),
+                    "mae":  float(test_details["mae"]),
+                    "lpips": float(test_details["lpips"]),
+                    "gdl":  float(test_details["gdl"]),
+                }
+
         # Log scalar losses to TensorBoard
         writer.add_scalar("loss/train", train_loss, global_step=epoch + 1)
         writer.add_scalar("lr", current_lr, global_step=epoch + 1)
         if val_loaders:
             writer.add_scalar("loss/val", val_loss, global_step=epoch + 1)
+        if test_metrics is not None:
+            writer.add_scalar("loss/test", float(test_details["loss"]), global_step=epoch + 1)  # type: ignore[possibly-undefined]
 
         if val_loaders:
             print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
@@ -1504,6 +1565,12 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 "Component Metrics | "
                 f"val(mse={val_metrics['mse']:.6f}, pmse={val_metrics['pmse']:.6f}, "
                 f"mae={val_metrics['mae']:.6f}, lpips={val_metrics['lpips']:.6f}, gdl={val_metrics['gdl']:.6f})"
+            )
+        if test_metrics is not None:
+            print(
+                "Component Metrics | "
+                f"test(mse={test_metrics['mse']:.6f}, pmse={test_metrics['pmse']:.6f}, "
+                f"mae={test_metrics['mae']:.6f}, lpips={test_metrics['lpips']:.6f}, gdl={test_metrics['gdl']:.6f})"
             )
 
         val_heuristic = _fixed_validation_heuristic(val_metrics)
@@ -1530,6 +1597,7 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 lr=current_lr,
                 train_metrics=train_metrics,
                 val_metrics=val_metrics,
+                test_metrics=test_metrics,
             )
             print(f"Appended component metrics CSV row: {csv_path}")
 
@@ -1540,6 +1608,14 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                          train_paths=train_paths, val_paths=val_paths,
                          ema_state=ema.state_dict() if ema is not None else None)
         print(f"Saved checkpoint: {epoch_ckpt}")
+
+        if (epoch + 1) == int(args.epochs):
+            final_ckpt = output_dir / "checkpoint_final_model.pt"
+            _save_checkpoint(final_ckpt, model, optimizer, scaler, epoch,
+                             train_loss=train_loss, val_loss=val_loss,
+                             train_paths=train_paths, val_paths=val_paths,
+                             ema_state=ema.state_dict() if ema is not None else None)
+            print(f"Saved final resumable checkpoint: {final_ckpt}")
 
         if _maybe_update_best_val_checkpoint(
             output_dir=output_dir,

@@ -580,6 +580,7 @@ def report_masked_voxel_stats(
     input: torch.Tensor,
     target: torch.Tensor | None = None,
     mask: torch.Tensor | None = None,
+    source_tags: list[str] | None = None,
 ):
     """Print stage-wise retention percentages for a 3D seismic example.
 
@@ -647,11 +648,15 @@ def report_masked_voxel_stats(
     max_y = int(nz_idx[:, 2].max().item())
     z_valid, x_valid, y_valid = tuple((max_z - min_z + 1, max_x - min_x + 1, max_y - min_y + 1))
 
+    source_suffix = ""
+    if source_tags:
+        source_suffix = f" / [{','.join(str(tag) for tag in source_tags)}]"
+
     print(
         f"         . retained percentages: (container shape, raw, voxel-mask, trace-mask, total) = ("
         f"{z_valid}, {x_valid}, {y_valid}), "
         f"{raw_selection_pct:.2f}%, "
         f"{voxel_mask_pct:.2f}%, "
         f"{trace_mask_pct:.2f}%  --> "
-        f"{total_retained_pct:.2f}%"
+        f"{total_retained_pct:.2f}%{source_suffix}"
     )

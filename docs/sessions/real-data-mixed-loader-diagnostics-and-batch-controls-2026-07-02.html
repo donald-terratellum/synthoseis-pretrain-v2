@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Real Data Mixed Loader Diagnostics and Batch Controls — 2026-07-02</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 2rem auto; line-height: 1.5; padding: 0 1rem; }
+    h1, h2 { line-height: 1.25; }
+    code { background: #f4f4f4; padding: 0.1rem 0.3rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Real Data Mixed Loader Diagnostics and Batch Controls — 2026-07-02</h1>
+
+  <h2>context and goals</h2>
+  <ul>
+    <li>Integrate real seismic datasets into train/test alongside synthetic datasets.</li>
+    <li>Add dataset-source visibility in first-batch diagnostics (<code>R</code> for real, <code>S</code> for synthetic).</li>
+    <li>Improve robustness for mixed dataset contracts (3-item and 4-item samples).</li>
+    <li>Add explicit control of train/val/test batches per epoch from CLI.</li>
+    <li>Ensure final epoch also writes an overwriteable full resumable checkpoint.</li>
+  </ul>
+
+  <h2>what was done</h2>
+  <ul>
+    <li>Added source-tag propagation through training data path and diagnostics output.</li>
+    <li>Added resilient mixed collate behavior and source-tag wrappers for datasets.</li>
+    <li>Fixed train batch fetch pipeline to carry optional source tags.</li>
+    <li>Updated masked-voxel reporting to print source tags (for example <code>/ [R,S]</code>).</li>
+    <li>Fixed per-dataset figure logging to handle 4-item samples.</li>
+    <li>Fixed validation preflight metadata handling for real datasets missing <code>available_cubes</code>.</li>
+    <li>Added metadata compatibility fields for <code>NpySeismicDataset</code>.</li>
+    <li>Added and wired <code>--test_batches_per_epoch</code> CLI argument.</li>
+    <li>Applied test-batch cap in test validation pass and summary reporting.</li>
+    <li>Added final-epoch extra full checkpoint save to <code>checkpoint_final_model.pt</code>.</li>
+  </ul>
+
+  <h2>how was it done</h2>
+  <ul>
+    <li>Implemented wrappers and polymorphic handling across loader, collate, fetch, and reporting functions.</li>
+    <li>Added fallback metadata resolution in validation preflight (<code>available_cubes</code> -&gt; <code>data_path</code>/<code>_path</code> stem -&gt; class name).</li>
+    <li>Extended parser, argument validation, loader build calls, and <code>validate(...)</code> test invocation to accept and apply test batch limits.</li>
+    <li>Added focused regression tests around dataset figure logging, validation preflight metadata fallback, and CLI parser support for test-batch control.</li>
+    <li>Verified with targeted <code>pytest</code> runs after each fix.</li>
+  </ul>
+
+  <h2>when was it done and by whom</h2>
+  <ul>
+    <li>Date/time: 2026-07-02 (CDT).</li>
+    <li>Authoring agent: GitHub Copilot (GPT-5.3-Codex), working with the repository owner.</li>
+  </ul>
+
+  <h2>basic info (relevant commits, files involved)</h2>
+  <ul>
+    <li>Branch: <code>feature/multi-loss-and-unet-levels</code>.</li>
+    <li>Files involved (code):
+      <ul>
+        <li><code>src/synthoseis_pre_train/_dataset_manager.py</code></li>
+        <li><code>src/synthoseis_pre_train/_train_batch_fetch.py</code></li>
+        <li><code>src/synthoseis_pre_train/models.py</code></li>
+        <li><code>src/synthoseis_pre_train/pretrain.py</code></li>
+        <li><code>src/synthoseis_pre_train/_dataset_figures.py</code></li>
+        <li><code>src/synthoseis_pre_train/_validation_loop.py</code></li>
+        <li><code>src/synthoseis_pre_train/_npy_dataset.py</code></li>
+        <li><code>train_cli.py</code></li>
+      </ul>
+    </li>
+    <li>Files involved (studies/tests):
+      <ul>
+        <li><code>studies/list_real_seismic.py</code></li>
+        <li><code>studies/list_real_seismic_inference_metrics.py</code></li>
+        <li><code>studies/prewarm_real_seismic_zarr.py</code></li>
+        <li><code>tests/test_train_cli.py</code></li>
+        <li><code>tests/test_dataset_figures.py</code></li>
+        <li><code>tests/test_validation_loop.py</code></li>
+        <li><code>tests/test_npy_dataset.py</code></li>
+        <li><code>tests/test_real_seismic_inference_metrics.py</code></li>
+      </ul>
+    </li>
+    <li>Validation commands executed during session are documented in the markdown companion file.</li>
+    <li>Relevant commit(s): created in this session closeout step (reported in terminal output and chat response).</li>
+  </ul>
+
+  <h2>next and/or future follow-up work suggestions</h2>
+  <ul>
+    <li>Add integration tests for end-to-end train+val+test batch cap behavior across multiple loaders.</li>
+    <li>Add a smoke test that validates <code>checkpoint_final_model.pt</code> presence and resumability semantics.</li>
+    <li>Replace temporary inline training diagnostics marked TODO in <code>train_epoch</code> with structured logging.</li>
+    <li>Add documentation examples for combined synthetic/real training and batch-control flags.</li>
+  </ul>
+</body>
+</html>

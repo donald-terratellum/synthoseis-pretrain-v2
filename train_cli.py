@@ -30,6 +30,37 @@ def _normalize_data_paths(data_paths: list[str], dataset_glob: str) -> list[str]
     return list(dict.fromkeys(normalized))
 
 
+def _normalize_real_data_paths(paths: list[str], dataset_glob: str) -> list[str]:
+    """Expand real-data directories into .npy and .zarr dataset paths.
+
+    Accepts explicit file/store paths unchanged. For directory inputs we discover:
+    - zarr datasets matching dataset_glob (for seismic__/model_data.zarr style trees)
+    - any *.zarr stores under the directory
+    - any *.npy files under the directory
+    """
+    normalized: list[str] = []
+
+    def _is_internal_real_cache(candidate: str) -> bool:
+        return candidate.endswith(".real.zarr")
+
+    for raw_path in paths:
+        path = Path(raw_path)
+        if path.is_dir() and path.suffix != ".zarr":
+            discovered: list[str] = []
+            discovered.extend(str(candidate) for candidate in path.glob(dataset_glob))
+            discovered.extend(str(candidate) for candidate in path.rglob("*.zarr"))
+            discovered.extend(str(candidate) for candidate in path.rglob("*.npy"))
+            if discovered:
+                discovered_sorted = sorted(
+                    {candidate for candidate in discovered if not _is_internal_real_cache(candidate)},
+                    key=lambda candidate: Path(candidate).parent.stat().st_mtime,
+                )
+                normalized.extend(discovered_sorted)
+                continue
+        normalized.append(raw_path)
+    return list(dict.fromkeys(normalized))
+
+
 def _collect_cli_option_names(argv: list[str]) -> set[str]:
     provided: set[str] = set()
     for token in argv:
@@ -119,6 +150,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Optional fixed number of train batches per epoch. If set, loader cycles as needed.")
     parser.add_argument("--val_batches_per_epoch", type=int, default=None,
                        help="Optional fixed number of validation batches per epoch.")
+    parser.add_argument("--test_batches_per_epoch", type=int, default=None,
+                       help="Optional fixed number of real-test batches per epoch.")
     parser.add_argument("--refresh_every_batches", type=int, default=10,
                        help="Deprecated compatibility flag; dataset discovery/pruning now happens only at epoch boundaries.")
     parser.add_argument("--output_dir", type=str, default="./checkpoints",
@@ -363,6 +396,26 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use a deep reconstruction head (2 Conv3d layers with norm and activation) instead of a single Conv3d layer.",
     )
+    parser.add_argument(
+        "--real_train_paths",
+        type=str,
+        nargs="*",
+        default=[],
+        help="Paths (or folders) for real seismic .npy/.zarr datasets to include in training (mixed with zarr datasets via voxel-count weighting).",
+    )
+    parser.add_argument(
+        "--real_test_paths",
+        type=str,
+        nargs="*",
+        default=[],
+        help="Paths (or folders) for real seismic .npy/.zarr datasets used as a held-out test set (reported separately from validation; does not affect LR or checkpoints).",
+    )
+    parser.add_argument(
+        "--real_epoch_samples",
+        type=int,
+        default=None,
+        help="Optional cap on random 128\u00b3 crops drawn from each real .npy dataset per epoch (default: all valid positions).",
+    )
     return parser
 
 
@@ -371,6 +424,8 @@ def main(argv: list[str] | None = None) -> None:
     cli_argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
     args.data_paths = _normalize_data_paths(args.data_paths, args.dataset_glob)
+    args.real_train_paths = _normalize_real_data_paths(args.real_train_paths, args.dataset_glob)
+    args.real_test_paths = _normalize_real_data_paths(args.real_test_paths, args.dataset_glob)
 
     backprop_defaults = {
         "lr": parser.get_default("lr"),

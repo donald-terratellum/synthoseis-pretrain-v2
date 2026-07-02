@@ -33,12 +33,42 @@ def _log_per_dataset_figures(
         candidates = [requested_ds] + [ds for ds in all_datasets if ds is not requested_ds]
         for candidate in candidates:
             try:
-                inp, tgt, mask = candidate[0]
+                sample = candidate[0]
+                if not isinstance(sample, (tuple, list)) or len(sample) < 3:
+                    raise ValueError(
+                        "Dataset sample must be a tuple/list with at least 3 items: (input, target, mask)"
+                    )
+                inp, tgt, mask = sample[0], sample[1], sample[2]
                 return candidate, inp, tgt, mask
             except RuntimeError as exc:
                 if "All array keys unavailable in zarr store" not in str(exc):
                     raise
         return None
+
+    def _as_5d_input_tensor(x: Any) -> torch.Tensor:
+        t = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
+        if t.ndim == 3:
+            t = t.unsqueeze(0).unsqueeze(0)
+        elif t.ndim == 4:
+            if int(t.shape[0]) == 1:
+                t = t.unsqueeze(0)
+            else:
+                t = t.unsqueeze(1)
+        elif t.ndim != 5:
+            raise ValueError(f"Unexpected input rank for dataset figure sample: shape={tuple(t.shape)}")
+        return t.float()
+
+    def _as_4d_target_tensor(x: Any) -> torch.Tensor:
+        t = x if isinstance(x, torch.Tensor) else torch.as_tensor(x)
+        if t.ndim == 3:
+            t = t.unsqueeze(0)
+        elif t.ndim == 4:
+            pass
+        elif t.ndim == 5 and int(t.shape[0]) == 1:
+            t = t.squeeze(0)
+        else:
+            raise ValueError(f"Unexpected target rank for dataset figure sample: shape={tuple(t.shape)}")
+        return t.float()
 
     if not isinstance(merged_loader.dataset, ConcatDataset):
         import warnings
@@ -66,9 +96,9 @@ def _log_per_dataset_figures(
                     )
                     break
                 sample_ds, inp, tgt, _ = sample
-                inp_t = torch.from_numpy(inp).unsqueeze(0).unsqueeze(0).float().to(device)
+                inp_t = _as_5d_input_tensor(inp).to(device)
                 out_t = model(inp_t)
-                tgt_t = torch.from_numpy(tgt).unsqueeze(0)
+                tgt_t = _as_4d_target_tensor(tgt)
                 sample_ds_data_path = getattr(sample_ds, "data_path", "unknown_dataset/model_data.zarr")
                 sample_ds_name = Path(sample_ds_data_path).parent.name
                 title = (
