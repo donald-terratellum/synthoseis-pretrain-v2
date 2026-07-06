@@ -3,12 +3,18 @@
 
 Rule:
 - Keep best_val_epoch.pt
-- Keep checkpoint_epoch_XXXX.pt only when epoch is a multiple of 5
+- Keep checkpoint_epoch_XXXX.pt only when epoch is a multiple of N
+    (default N=5, configurable via --keep-every)
 - Delete all other .pt files in those folders
 
 Safety:
 - Dry-run by default
 - Use --apply to perform deletions
+
+This script preserves the resumable end-of-training artifacts:
+- best_val_epoch.pt
+- final_model.pt
+- checkpoint_final_model.pt
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Delete .pt files in directories containing best_val_epoch.pt, "
-            "keeping only best_val_epoch.pt and checkpoint_epoch_XXXX.pt where XXXX % 5 == 0"
+            "keeping only best_val_epoch.pt and checkpoint_epoch_XXXX.pt where XXXX % N == 0"
         )
     )
     parser.add_argument(
@@ -39,12 +45,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Actually delete files (default is dry-run)",
     )
+    parser.add_argument(
+        "--keep-every",
+        type=int,
+        default=5,
+        help="Keep checkpoint_epoch_XXXX.pt only when XXXX is a multiple of this value (default: 5)",
+    )
     return parser.parse_args()
 
 
-def should_keep(pt_file: Path) -> bool:
+def should_keep(pt_file: Path, keep_every: int = 5) -> bool:
     name = pt_file.name
-    if name in ("best_val_epoch.pt", "final_model.pt"):
+    if name in ("best_val_epoch.pt", "final_model.pt", "checkpoint_final_model.pt"):
         return True
 
     m = EPOCH_RE.match(name)
@@ -52,12 +64,17 @@ def should_keep(pt_file: Path) -> bool:
         return False
 
     epoch = int(m.group(1))
-    return epoch % 5 == 0
+    return epoch % int(keep_every) == 0
 
 
 def main() -> int:
     args = parse_args()
     root = args.root
+    keep_every = int(args.keep_every)
+
+    if keep_every <= 0:
+        print(f"ERROR: --keep-every must be > 0, got: {keep_every}")
+        return 2
 
     if not root.exists() or not root.is_dir():
         print(f"ERROR: root does not exist or is not a directory: {root}")
@@ -84,7 +101,7 @@ def main() -> int:
         for pt_file in sorted(folder.glob("*.pt")):
             scanned += 1
             file_size = pt_file.stat().st_size
-            if should_keep(pt_file):
+            if should_keep(pt_file, keep_every=keep_every):
                 kept += 1
                 print(f"  KEEP   {pt_file.name}  ({file_size / 1024**2:.1f} MB)")
                 continue

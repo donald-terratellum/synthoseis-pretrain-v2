@@ -60,6 +60,38 @@ from synthoseis_pre_train._train_step import _maybe_apply_optimizer_step
 from synthoseis_pre_train.losses import LPIPSLoss, compute_pmse_loss, gradient_difference_loss_3d
 
 
+def _resolve_resume_checkpoint_path(resume_path: str | Path) -> Path:
+    """Resolve a resume checkpoint path with backward-compatible fallbacks.
+
+    If the requested checkpoint is missing, prefer the newest
+    checkpoint_epoch_*.pt in the same directory. This keeps older runs
+    resumable even when they do not have checkpoint_final_model.pt yet.
+    """
+    path = Path(resume_path)
+    if path.exists():
+        return path
+
+    parent = path.parent
+    if parent.exists():
+        epoch_candidates: list[tuple[int, Path]] = []
+        for candidate in parent.glob("checkpoint_epoch_*.pt"):
+            match = re.fullmatch(r"checkpoint_epoch_(\d+)\.pt", candidate.name)
+            if match is None:
+                continue
+            epoch_candidates.append((int(match.group(1)), candidate))
+
+        if epoch_candidates:
+            epoch_candidates.sort(key=lambda item: item[0])
+            fallback = epoch_candidates[-1][1]
+            print(
+                f"WARNING: requested resume checkpoint not found: {path} ; "
+                f"falling back to latest epoch checkpoint: {fallback}"
+            )
+            return fallback
+
+    raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+
+
 DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
     "lr": 1e-4,
     "lr_schedule": "poly",
@@ -1269,8 +1301,9 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
 
     start_epoch = 0
     if args.resume:
-        print(f"Resuming from checkpoint: {args.resume}")
-        checkpoint = torch.load(args.resume, map_location=device)
+        resume_path = _resolve_resume_checkpoint_path(args.resume)
+        print(f"Resuming from checkpoint: {resume_path}")
+        checkpoint = torch.load(resume_path, map_location=device)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         if scaler is not None and checkpoint.get("scaler") is not None:
