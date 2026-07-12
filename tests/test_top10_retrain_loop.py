@@ -3,6 +3,8 @@ from pathlib import Path
 from studies.run_top10_retrain_loop import (
     TOP_10_MODEL_SPECS,
     _build_train_command,
+    _backup_generated_datasets,
+    _cleanup_partial_generation_outputs,
     _delete_generated_datasets,
     cumulative_targets,
     parse_schedule,
@@ -46,6 +48,7 @@ def test_build_train_command_omits_resume_when_checkpoint_missing(tmp_path: Path
         lr_min=5e-6,
     )
 
+    assert "--backup_dir" not in cmd
     assert "--resume" not in cmd
 
 
@@ -84,9 +87,31 @@ def test_build_train_command_includes_resume_when_checkpoint_exists(tmp_path: Pa
         lr_min=5e-6,
     )
 
+    assert "--backup_dir" not in cmd
     assert "--resume" in cmd
     idx = cmd.index("--resume")
     assert cmd[idx + 1].endswith("checkpoint_final_model.pt")
+
+
+def test_backup_generated_datasets_copies_to_backup_root(tmp_path: Path):
+    data_root = tmp_path / "data"
+    backup_root = tmp_path / "backup"
+    src_dir = data_root / "seismic__2026.50000000__synthoseis_run_1000"
+    src_dir.mkdir(parents=True)
+    (src_dir / "model_data.zarr").write_text("dummy", encoding="utf-8")
+
+    copied = _backup_generated_datasets(
+        data_folder=str(data_root),
+        backup_dir=str(backup_root),
+        start_index=1000,
+        count=1,
+        dry_run=False,
+    )
+
+    assert copied == 1
+    dst_dir = backup_root / src_dir.relative_to(data_root)
+    assert dst_dir.exists()
+    assert (dst_dir / "model_data.zarr").read_text(encoding="utf-8") == "dummy"
 
 
 def test_delete_generated_datasets_deletes_matching_run_indices(tmp_path: Path):
@@ -122,4 +147,40 @@ def test_delete_generated_datasets_dry_run_preserves_files(tmp_path: Path):
     )
 
     assert deleted == 1
+    assert ds_dir.exists()
+
+
+def test_cleanup_partial_generation_outputs_removes_matching_dirs(tmp_path: Path):
+    rm_a = tmp_path / "seismic__2026.50000000__synthoseis_run_1064"
+    rm_b = tmp_path / "temp_folder__2026.50000000__synthoseis_run_1064"
+    keep = tmp_path / "seismic__2026.50000000__synthoseis_run_1065"
+    rm_a.mkdir()
+    rm_b.mkdir()
+    keep.mkdir()
+
+    removed = _cleanup_partial_generation_outputs(
+        data_folder=str(tmp_path),
+        start_index=1064,
+        count=1,
+        dry_run=False,
+    )
+
+    assert removed == 2
+    assert not rm_a.exists()
+    assert not rm_b.exists()
+    assert keep.exists()
+
+
+def test_cleanup_partial_generation_outputs_dry_run_preserves_dirs(tmp_path: Path):
+    ds_dir = tmp_path / "seismic__2026.50000000__synthoseis_run_1064"
+    ds_dir.mkdir()
+
+    removed = _cleanup_partial_generation_outputs(
+        data_folder=str(tmp_path),
+        start_index=1064,
+        count=1,
+        dry_run=True,
+    )
+
+    assert removed == 1
     assert ds_dir.exists()

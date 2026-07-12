@@ -157,6 +157,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output_dir", type=str, default="./checkpoints",
                        help="Output directory for checkpoints")
     parser.add_argument(
+        "--backup_dir",
+        type=str,
+        default=None,
+        help=(
+            "Optional backup root for newly discovered datasets under --data_folder. "
+            "When set, full dataset folders are mirrored with timestamps preserved."
+        ),
+    )
+    parser.add_argument(
         "--batch_size",
         type=int,
         default=None,

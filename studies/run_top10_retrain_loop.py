@@ -234,6 +234,111 @@ def _delete_generated_datasets(
     return deleted
 
 
+def _cleanup_partial_generation_outputs(
+    *,
+    data_folder: str,
+    start_index: int,
+    count: int,
+    dry_run: bool,
+) -> int:
+    """Remove partial synthoseis outputs for a run-index range.
+
+    This targets both finalized dataset folders and temporary generation folders
+    that include `synthoseis_run_XXXX` in their names.
+    """
+    data_root = Path(data_folder)
+    if not data_root.exists():
+        return 0
+
+    removed = 0
+    for run_idx in range(int(start_index), int(start_index) + int(count)):
+        run_suffix = f"synthoseis_run_{run_idx:04d}"
+        for candidate in sorted(data_root.glob(f"*{run_suffix}*")):
+            if not candidate.is_dir():
+                continue
+            if dry_run:
+                print(f"DRY-RUN: would remove partial generation folder: {candidate}")
+            else:
+                print(f"Removing partial generation folder: {candidate}")
+                shutil.rmtree(candidate, ignore_errors=True)
+            removed += 1
+
+    return removed
+
+
+def _backup_generated_datasets(
+    *,
+    data_folder: str,
+    backup_dir: str,
+    start_index: int,
+    count: int,
+    dry_run: bool,
+) -> int:
+    """Copy freshly generated dataset folders to the backup root before training.
+
+    The loop backs up finalized SynthoSeis folders directly so the training
+    entrypoint does not need to rediscover them later.
+    """
+    data_root = Path(data_folder)
+    backup_root = Path(backup_dir)
+    if not data_root.exists():
+        print(f"WARNING: data folder does not exist for backup: {data_root}")
+        return 0
+
+    data_root_resolved = data_root.resolve()
+    backup_root.mkdir(parents=True, exist_ok=True)
+    backed_up_run_indices: set[int] = set()
+
+    print(
+        "Backup copy starting: "
+        f"data_root={data_root_resolved} backup_root={backup_root.resolve()} "
+        f"start_index={start_index} count={count}"
+    )
+
+    for run_idx in range(int(start_index), int(start_index) + int(count)):
+        run_suffix = f"synthoseis_run_{run_idx:04d}"
+        candidate_dirs = [
+            candidate
+            for candidate in sorted(data_root.glob(f"seismic__*__{run_suffix}"))
+            if candidate.is_dir()
+        ]
+        if not candidate_dirs:
+            print(
+                "WARNING: no finalized generated dataset folders found for backup: "
+                f"run_index={run_idx}, pattern=seismic__*__{run_suffix}"
+            )
+            continue
+
+        for src_dataset_dir in candidate_dirs:
+            try:
+                rel_dataset_dir = src_dataset_dir.resolve().relative_to(data_root_resolved)
+            except Exception:
+                print(
+                    "WARNING: skipping backup for dataset outside --data-folder: "
+                    f"{src_dataset_dir}"
+                )
+                continue
+
+            dst_dataset_dir = backup_root / rel_dataset_dir
+            try:
+                print(f"Copying dataset: run_index={run_idx} {src_dataset_dir} -> {dst_dataset_dir}")
+                if dst_dataset_dir.exists():
+                    shutil.rmtree(dst_dataset_dir)
+                dst_dataset_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src_dataset_dir, dst_dataset_dir, copy_function=shutil.copy2)
+                shutil.copystat(src_dataset_dir, dst_dataset_dir)
+                print(f"Backed up dataset: run_index={run_idx} {src_dataset_dir} -> {dst_dataset_dir}")
+                backed_up_run_indices.add(run_idx)
+            except Exception as exc:
+                print(f"WARNING: failed to back up dataset run_index={run_idx} {src_dataset_dir}: {exc}")
+
+    print(
+        "Backup status: "
+        f"backed_up_run_indices={len(backed_up_run_indices)}/{count}"
+    )
+    return len(backed_up_run_indices)
+
+
 def _build_train_command(
     spec: ModelSpec,
     *,
@@ -321,6 +426,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--datasets-per-pass", type=int, default=10, help="Number of generated datasets per pass.")
     parser.add_argument("--synthoseis-dir", default="~/synthoseis/synthoseis")
     parser.add_argument("--data-folder", default="/Users/donaldpg/synthoseis/fake_data")
+    parser.add_argument(
+        "--backup-dir",
+        default="/Volumes/Crucial X9/fake_data",
+        help="Backup root forwarded to train_cli.py --backup_dir (default: /Volumes/Crucial X9/fake_data)",
+    )
     parser.add_argument("--real-train-paths", default="/Users/donaldpg/synthoseis/real_data")
     parser.add_argument("--real-test-paths", default="/Users/donaldpg/synthoseis/fake_data/test")
     parser.add_argument("--epoch-samples", type=int, default=200000)
@@ -397,13 +507,44 @@ def main() -> int:
                 "--start-index",
                 str(start_index_next),
             ]
-            _run_with_retries(
-                gen_cmd,
-                args.log_file,
-                max_retries=args.max_retries,
-                retry_delay_sec=args.retry_delay_sec,
-                dry_run=args.dry_run,
-            )
+            gen_attempts = max(1, int(args.max_retries))
+            for attempt in range(1, gen_attempts + 1):
+                rc = _run_streaming(gen_cmd, args.log_file, dry_run=args.dry_run)
+                if rc == 0:
+                    break
+                if attempt >= gen_attempts:
+                    raise RuntimeError(
+                        f"Command failed after {gen_attempts} attempt(s): {' '.join(gen_cmd)}"
+                    )
+                _cleanup_partial_generation_outputs(
+                    data_folder=args.data_folder,
+                    start_index=int(start_index_next),
+                    count=int(args.datasets_per_pass),
+                    dry_run=args.dry_run,
+                )
+                print(
+                    f"WARNING: generation command failed (attempt {attempt}/{gen_attempts}); "
+                    f"retrying in {args.retry_delay_sec}s"
+                )
+                if not args.dry_run:
+                    time.sleep(max(0, int(args.retry_delay_sec)))
+
+            if args.backup_dir:
+                backed_up_count = _backup_generated_datasets(
+                    data_folder=args.data_folder,
+                    backup_dir=args.backup_dir,
+                    start_index=int(start_index_next),
+                    count=int(args.datasets_per_pass),
+                    dry_run=args.dry_run,
+                )
+                if not args.dry_run and backed_up_count != int(args.datasets_per_pass):
+                    raise RuntimeError(
+                        "Backup copy did not cover all newly generated datasets; "
+                        f"expected {int(args.datasets_per_pass)}, copied {backed_up_count}."
+                    )
+            else:
+                print("Backup status: backup_dir is None; skipping dataset backup")
+
             datasets_generated = True
             state.update(
                 {

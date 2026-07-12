@@ -300,7 +300,7 @@ uv run python studies/run_random_training_sweep.py \
 #   run_top10_retrain_loop --start-index 1200
 run_top10_retrain_loop() {
   uv run python studies/run_top10_retrain_loop.py \
-    --schedule 2,2,3,3,5,5,5,5 \
+    --schedule 2,2,3,3,5,5,5,5,5,5,5,5 \
     --start-index 1000 \
     --datasets-per-pass 10 \
     --data-folder /Users/donaldpg/synthoseis/fake_data \

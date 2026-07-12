@@ -183,3 +183,15 @@ def test_parser_accepts_test_batches_per_epoch():
     ])
 
     assert args.test_batches_per_epoch == 40
+
+
+def test_parser_accepts_backup_dir():
+    parser = train_cli._build_parser()
+    args = parser.parse_args([
+        "--data_paths",
+        "dummy.zarr",
+        "--backup_dir",
+        "/tmp/backup_data",
+    ])
+
+    assert args.backup_dir == "/tmp/backup_data"

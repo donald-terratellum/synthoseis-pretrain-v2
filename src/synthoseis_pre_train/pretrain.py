@@ -8,6 +8,7 @@ import random
 import time
 import math
 import platform
+import shutil
 import csv
 import re
 
@@ -90,6 +91,58 @@ def _resolve_resume_checkpoint_path(resume_path: str | Path) -> Path:
             return fallback
 
     raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+
+
+def _backup_dataset_folders(
+    dataset_paths: list[str],
+    *,
+    data_root: Path,
+    backup_root: Path,
+    epoch: int | None = None,
+) -> list[str]:
+    """Copy full dataset folders to backup_root preserving timestamps.
+
+    `dataset_paths` are expected to point to zarr entries such as
+    `.../seismic__.../model_data.zarr`. We copy the parent dataset folder.
+    """
+    copied: list[str] = []
+    data_root_resolved = data_root.resolve()
+    backup_root.mkdir(parents=True, exist_ok=True)
+    epoch_prefix = f"epoch={epoch} " if epoch is not None else ""
+    print(
+        "  Backup copy starting: "
+        f"{epoch_prefix}data_root={data_root_resolved} backup_root={backup_root.resolve()} "
+        f"dataset_count={len(sorted(set(dataset_paths)))}"
+    )
+
+    for path_str in sorted(set(dataset_paths)):
+        src_zarr_path = Path(path_str)
+        src_dataset_dir = src_zarr_path.parent
+        try:
+            rel_dataset_dir = src_dataset_dir.resolve().relative_to(data_root_resolved)
+        except Exception:
+            print(
+                "  WARNING: skipping backup for dataset outside --data_folder: "
+                f"{src_dataset_dir}"
+            )
+            continue
+
+        dst_dataset_dir = backup_root / rel_dataset_dir
+        try:
+            print(
+                f"  Copying dataset: {epoch_prefix}{src_dataset_dir} -> {dst_dataset_dir}"
+            )
+            if dst_dataset_dir.exists():
+                shutil.rmtree(dst_dataset_dir)
+            dst_dataset_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_dataset_dir, dst_dataset_dir, copy_function=shutil.copy2)
+            shutil.copystat(src_dataset_dir, dst_dataset_dir)
+            print(f"  Backed up dataset: {epoch_prefix}{src_dataset_dir} -> {dst_dataset_dir}")
+            copied.append(path_str)
+        except Exception as exc:
+            print(f"  WARNING: failed to back up dataset {epoch_prefix}{src_dataset_dir}: {exc}")
+
+    return copied
 
 
 DEFAULT_BACKPROP_DEFAULTS: dict[str, object] = {
@@ -978,6 +1031,13 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    backup_dir_raw = getattr(args, "backup_dir", None)
+    backup_dir_path: Path | None = None
+    if backup_dir_raw:
+        backup_dir_path = Path(str(backup_dir_raw)).expanduser()
+        backup_dir_path.mkdir(parents=True, exist_ok=True)
+        print(f"Dataset backup enabled: {backup_dir_path}")
+
     device = get_default_device(args.device)
     print_device_summary(args.device)
 
@@ -1010,6 +1070,8 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
             val_discovered_at_start = _discover_zarr_paths(str(validation_subfolder), args.dataset_glob)
         known = set(all_paths)
         all_paths = all_paths + [p for p in discovered_at_start if p not in known]
+
+    backed_up_dataset_paths: set[str] = set(discovered_at_start + val_discovered_at_start)
 
     # Check for a saved split in the resume checkpoint BEFORE shuffling
     saved_train_paths = None
@@ -1376,6 +1438,28 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                 val_paths = val_paths + [p for p in discovered_val if p not in known_val]
                 _dset_train = set(discovered_train)
                 _dset_val = set(discovered_val)
+
+                if backup_dir_path is not None:
+                    backup_candidates = [p for p in (discovered_train + discovered_val) if p not in backed_up_dataset_paths]
+                    print(
+                        "Backup check: "
+                        f"epoch={epoch + 1} "
+                        f"data_root={Path(args.data_folder).resolve()} "
+                        f"backup_root={backup_dir_path.resolve()} "
+                        f"candidates={len(backup_candidates)}"
+                    )
+                    if backup_candidates:
+                        copied = _backup_dataset_folders(
+                            backup_candidates,
+                            data_root=Path(args.data_folder),
+                            backup_root=backup_dir_path,
+                            epoch=epoch + 1,
+                        )
+                        backed_up_dataset_paths.update(copied)
+                    else:
+                        print(f"Backup status: epoch={epoch + 1} no new datasets to copy this epoch")
+                else:
+                    print(f"Backup status: epoch={epoch + 1} backup_dir_path is None; skipping dataset backup")
             else:
                 keep_total = split_target_train + split_target_val
                 discovered = _prune_oldest_to_target(
@@ -1388,6 +1472,28 @@ def _run_training_with_args(args, cli_provided: set[str], backprop_defaults: dic
                     discovered, train_paths, val_paths, split_target_train, split_target_val
                 )
                 _dset = set(discovered)
+
+                if backup_dir_path is not None:
+                    backup_candidates = [p for p in discovered if p not in backed_up_dataset_paths]
+                    print(
+                        "Backup check: "
+                        f"epoch={epoch + 1} "
+                        f"data_root={Path(args.data_folder).resolve()} "
+                        f"backup_root={backup_dir_path.resolve()} "
+                        f"candidates={len(backup_candidates)}"
+                    )
+                    if backup_candidates:
+                        copied = _backup_dataset_folders(
+                            backup_candidates,
+                            data_root=Path(args.data_folder),
+                            backup_root=backup_dir_path,
+                            epoch=epoch + 1,
+                        )
+                        backed_up_dataset_paths.update(copied)
+                    else:
+                        print(f"Backup status: epoch={epoch + 1} no new datasets to copy this epoch")
+                else:
+                    print(f"Backup status: epoch={epoch + 1} backup_dir_path is None; skipping dataset backup")
         else:
             _dset = {p for p in (train_paths + val_paths) if Path(p).parent.exists()}
 

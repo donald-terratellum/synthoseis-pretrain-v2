@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary: Top-10 Retrain Loop Backup Handoff (2026-07-12)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 900px; line-height: 1.5; color: #111; }
+    h1, h2 { margin-top: 1.2rem; }
+    code { background: #f5f5f5; padding: 0.1rem 0.3rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: Top-10 Retrain Loop Backup Handoff (2026-07-12)</h1>
+
+  <h2>Context and Goals</h2>
+  <ul>
+    <li>Ensure newly generated SynthoSeis datasets are copied to the backup location specified by <code>--backup-dir</code>.</li>
+    <li>Move backup behavior closer to orchestration (<code>run_top10_retrain_loop.py</code>) instead of relying on later discovery in <code>train_cli.py</code>/<code>pretrain.py</code>.</li>
+    <li>Guarantee backup occurs after generation and before training resumes.</li>
+    <li>Improve backup diagnostics in training logs, including epoch-tagged visibility.</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Added explicit loop-local backup logic to copy newly generated dataset folders immediately after successful generation and before any model training begins.</li>
+    <li>Enforced backup completeness in the loop: if expected generated datasets are not backed up, the loop raises and does not continue to training.</li>
+    <li>Scoped copy targets to finalized generated dataset folders (<code>seismic__*__synthoseis_run_XXXX</code>) for the just-generated run-index range.</li>
+    <li>Removed top-10 loop dependency on passing <code>--backup_dir</code> into the train command for this path.</li>
+    <li>Added/updated tests for cleanup retry behavior, loop backup copying behavior, and train command behavior without backup passthrough.</li>
+    <li>Added backup diagnostic print statements in training path, including epoch number and backup status context.</li>
+  </ul>
+
+  <h2>How It Was Done</h2>
+  <ul>
+    <li>Updated orchestration flow in <code>studies/run_top10_retrain_loop.py</code> with a backup helper and pre-training gate.</li>
+    <li>Updated helper/tests in <code>tests/test_top10_retrain_loop.py</code> for backup behavior and command construction.</li>
+    <li>Verified targeted tests after each change set.</li>
+  </ul>
+
+  <h2>When It Was Done and By Whom</h2>
+  <ul>
+    <li>Date: 2026-07-12</li>
+    <li>Session timestamp captured: 2026-07-12 16:04:46 CDT</li>
+    <li>Implemented by: GitHub Copilot (GPT-5.3-Codex) collaborating with workspace owner (<code>donaldpg</code>).</li>
+  </ul>
+
+  <h2>Basic Info (Relevant Commits, Files Involved)</h2>
+  <ul>
+    <li>Relevant files modified in this session:
+      <ul>
+        <li><code>studies/run_top10_retrain_loop.py</code></li>
+        <li><code>tests/test_top10_retrain_loop.py</code></li>
+        <li><code>src/synthoseis_pre_train/pretrain.py</code></li>
+        <li><code>train_cli.py</code></li>
+        <li><code>tests/test_train_cli.py</code></li>
+        <li><code>train_cli__experiments.sh</code></li>
+        <li><code>tests/test_dataset_backup.py</code></li>
+      </ul>
+    </li>
+    <li>Session summary files added:
+      <ul>
+        <li><code>docs/sessions/top10-retrain-loop-backup-handoff-2026-07-12.md</code></li>
+        <li><code>docs/sessions/top10-retrain-loop-backup-handoff-2026-07-12.html</code></li>
+      </ul>
+    </li>
+    <li>Validation runs included targeted pytest checks for loop/backup behavior.</li>
+  </ul>
+
+  <h2>Next and/or Future Follow-Up Work Suggestions</h2>
+  <ul>
+    <li>Add a dedicated <code>--generate-backup-retry-delay-sec</code> to decouple generation backup retry timing from training retry timing.</li>
+    <li>Consider an optional strict mode to verify backup file counts/checksums for copied dataset folders.</li>
+    <li>Add a lightweight integration test for end-to-end pass flow (generate -&gt; backup -&gt; train gate) with mocked subprocess boundaries.</li>
+    <li>Consider de-duplicating backup logic between loop and training entrypoints (keep loop as primary, trainer as fallback).</li>
+  </ul>
+</body>
+</html>
