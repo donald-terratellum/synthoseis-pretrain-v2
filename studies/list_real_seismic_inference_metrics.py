@@ -20,7 +20,7 @@ from synthoseis_pre_train.models import create_model
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINTS_ROOT = ROOT / "checkpoints"
+CHECKPOINTS_ROOT = Path("/Volumes/Crucial X9/pretrain_v2_checkpoints")
 EPOCH_COMPONENT_METRICS_CSV = CHECKPOINTS_ROOT / "epoch_component_metrics.csv"
 REAL_SEISMIC_COMPONENT_METRICS_CSV = CHECKPOINTS_ROOT / "real_seismic_component_metrics.csv"
 REAL_SEISMIC_DIR = Path("/Users/donaldpg/synthoseis/real_data")
@@ -29,16 +29,16 @@ REAL_SEISMIC_DIRS = [REAL_SEISMIC_DIR, FAKE_DATA_TEST_DIR]
 PATCH_EDGE = 128
 
 TOP_10_BEST_CHECKPOINTS = [
-    "checkpoints/checkpoint_copilot_5/checkpoint_epoch_0034.pt",
-    "checkpoints/checkpoint_copilot_2/checkpoint_epoch_0029.pt",
-    "checkpoints/checkpoint_copilot_1/checkpoint_epoch_0033.pt",
-    "checkpoints/checkpoint_copilot_4/checkpoint_epoch_0035.pt",
-    "checkpoints/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_epoch_0008.pt",
+    str(CHECKPOINTS_ROOT / "checkpoint_copilot_5/checkpoint_epoch_0034.pt"),
+    str(CHECKPOINTS_ROOT / "checkpoint_copilot_2/checkpoint_epoch_0029.pt"),
+    str(CHECKPOINTS_ROOT / "checkpoint_copilot_1/checkpoint_epoch_0033.pt"),
+    str(CHECKPOINTS_ROOT / "checkpoint_copilot_4/checkpoint_epoch_0035.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_epoch_0010.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_epoch_0010.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_epoch_0010.pt"),
+    str(CHECKPOINTS_ROOT / "sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_epoch_0008.pt"),
 ]
 
 OUTPUT_COLUMNS = [

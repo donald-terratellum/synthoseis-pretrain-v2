@@ -1,3 +1,5 @@
+CHECKPOINTS_ROOT="${CHECKPOINTS_ROOT:-/Volumes/Crucial X9/pretrain_v2_checkpoints}"
+
 #####################################################
 
 ### mae only
@@ -16,7 +18,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_4.log
 
@@ -36,7 +38,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256f \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256f \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256f.log
 
@@ -56,7 +58,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper.log
 
@@ -79,7 +81,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -102,7 +104,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-99-1__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-99-1__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-99-1__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -125,7 +127,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-1-99__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-1-99__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-1-99__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -150,7 +152,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-5-95__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-5-95__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-5-95__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -175,7 +177,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-5-92_2__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-5-92_2__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-5-92_2__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -201,7 +203,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-87-5_5__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-87-5_5__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-87-5_5__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -228,7 +230,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-95-1_4__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-95-1_4__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-95-1_4__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -254,7 +256,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-98-0_1__depth_4__48_84_146_256__deeper_3masks \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-98-0_1__depth_4__48_84_146_256__deeper_3masks \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-98-0_1__depth_4__48_84_146_256__deeper_3masks.log
 
@@ -271,7 +273,7 @@ uv run python studies/run_random_training_sweep.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_base checkpoints \                                                                                  
+--output_base "${CHECKPOINTS_ROOT}" \                                                                                  
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/run_random_training_sweep.log 
 
@@ -288,7 +290,7 @@ uv run python studies/run_random_training_sweep.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_base checkpoints \
+--output_base "${CHECKPOINTS_ROOT}" \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/run_random_training_sweep.log
 
@@ -298,9 +300,11 @@ uv run python studies/run_random_training_sweep.py \
 #   run_top10_retrain_loop
 #   run_top10_retrain_loop --dry-run
 #   run_top10_retrain_loop --start-index 1200
+CHECKPOINTS_ROOT="${CHECKPOINTS_ROOT:-/Volumes/Crucial X9/pretrain_v2_checkpoints}"
+
 run_top10_retrain_loop() {
   uv run python studies/run_top10_retrain_loop.py \
-    --schedule 2,2,3,3,5,5,5,5,5,5,5,5 \
+    --schedule 2,2,3,3,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5 \
     --start-index 1000 \
     --datasets-per-pass 10 \
     --data-folder /Users/donaldpg/synthoseis/fake_data \
@@ -314,7 +318,7 @@ run_top10_retrain_loop() {
     --batch-size 2 \
     --val-split-ratio 0.3 \
     --lr-min 5e-6 \
-    --state-path checkpoints/top10_retrain_loop_state.json \
+    --state-path ${CHECKPOINTS_ROOT}/top10_retrain_loop_state.json \
     --log-file logs/top10_retrain_loop.log \
     --max-retries 2 \
     --retry-delay-sec 300 \
@@ -332,16 +336,16 @@ run_top10_retrain_loop() {
 # 5. Aggressive 4-level variant, still MAE-first but with a small LPIPS signal:
 
 top_10_best_checkpoints = [
-    "checkpoints/checkpoint_copilot_5/checkpoint_epoch_0034.pt",
-    "checkpoints/checkpoint_copilot_2/checkpoint_epoch_0029.pt",
-    "checkpoints/checkpoint_copilot_1/checkpoint_epoch_0033.pt",
-    "checkpoints/checkpoint_copilot_4/checkpoint_epoch_0035.pt",
-    "checkpoints/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_epoch_0010.pt",
-    "checkpoints/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_epoch_0008.pt",
+    "${CHECKPOINTS_ROOT}/checkpoint_copilot_5/checkpoint_epoch_0034.pt",
+    "${CHECKPOINTS_ROOT}/checkpoint_copilot_2/checkpoint_epoch_0029.pt",
+    "${CHECKPOINTS_ROOT}/checkpoint_copilot_1/checkpoint_epoch_0033.pt",
+    "${CHECKPOINTS_ROOT}/checkpoint_copilot_4/checkpoint_epoch_0035.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_epoch_0010.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_epoch_0010.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_epoch_0010.pt",
+    "${CHECKPOINTS_ROOT}/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_epoch_0008.pt",
 ]
 
 date
@@ -398,7 +402,7 @@ cd /Users/donaldpg/synthoseis-pretrain-v2
 
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/checkpoint_copilot_1 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoint_copilot_1 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -410,11 +414,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 3 --hidden_dims 40 80 160 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.0 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 1e-5  \
---resume checkpoints/checkpoint_copilot_1/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/checkpoint_copilot_1/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/checkpoint_copilot_2 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoint_copilot_2 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -426,11 +430,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 3 --hidden_dims 40 88 176 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.001 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 1e-5  \
---resume checkpoints/checkpoint_copilot_2/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/checkpoint_copilot_2/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/checkpoint_copilot_4 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoint_copilot_4 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -442,11 +446,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 40 80 160 256 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.0 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 1e-5  \
---resume checkpoints/checkpoint_copilot_4/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/checkpoint_copilot_4/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/checkpoint_copilot_5 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoint_copilot_5 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -458,14 +462,14 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 44 88 176 256 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.001 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 1e-5 2>&1 \
---resume checkpoints/checkpoint_copilot_5/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/checkpoint_copilot_5/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python studies/prune_pt_in_best_val_folders.py --apply
 ###
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -477,11 +481,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 40 74 138 256 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.0 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 5e-5  \
---resume checkpoints/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -493,13 +497,13 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 32 64 128 256 --encoder_depth_profile baseline \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.990 --mc_lpips_weight 0.000 --mc_tv_weight 0.000 --mc_gdl_weight 0.010 \
 --lr_min 5e-6 --lr 5e-5  \
---resume checkpoints/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python studies/prune_pt_in_best_val_folders.py --apply
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -511,11 +515,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 3 --hidden_dims 40 80 160 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.001 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 5e-5  \
---resume checkpoints/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -527,13 +531,13 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 3 --hidden_dims 32 64 128 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.0 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 5e-5  \
---resume checkpoints/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python studies/prune_pt_in_best_val_folders.py --apply
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -545,11 +549,11 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 40 74 138 256 --encoder_depth_profile deeper \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.995 --mc_lpips_weight 0.005 --mc_tv_weight 0.001 --mc_gdl_weight 0 \
 --lr_min 5e-6 --lr 5e-5 2>&1 \
---resume checkpoints/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
---output_dir checkpoints/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 --real_train_paths /Users/donaldpg/synthoseis/real_data \
 --real_test_paths /Users/donaldpg/synthoseis/fake_data/test \
@@ -561,7 +565,7 @@ uv run python -u train_cli.py --loss multi_component --mc_lpips_net alex \
 --val_split_ratio 0.3 --unet_levels 4 --hidden_dims 40 74 138 256 --encoder_depth_profile deepest \
 --mc_mse_weight 0 --mc_pmse_weight 0 --mc_mae_weight 0.999 --mc_lpips_weight 0.0 --mc_tv_weight 0.0 --mc_gdl_weight 0.001 \
 --lr_min 5e-6 --lr 5e-5 2>&1 \
---resume checkpoints/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_final_model.pt \
+--resume ${CHECKPOINTS_ROOT}/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001/checkpoint_final_model.pt \
 | tee -a logs/run_random_training_colpilot_sweep.log
 
 
@@ -584,7 +588,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1 \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.025 --lr_poly_power 0.9 \
 --lr_min 5e-06 --lr 1e-05 \
---output_dir checkpoints/sweep_20260620_055743_r005_u3_h40-80-160_lp0p010_tv0p010 \
+--output_dir ${CHECKPOINTS_ROOT}/sweep_20260620_055743_r005_u3_h40-80-160_lp0p010_tv0p010 \
 --data_folder /Users/donaldpg/synthoseis/fake_data \
 --tb_image_epochs 1 5 8 9 10 \
 --batch_size 2 \
@@ -607,7 +611,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_78_128_208 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_78_128_208 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_4__48_78_128_208.log
 
@@ -630,7 +634,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-99-1__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-99-1__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-99-1__depth_3.log
 
@@ -650,7 +654,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-99-0-1__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-99-0-1__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-99-0-1__depth_3.log
 
@@ -670,7 +674,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__99-0-0-1__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__99-0-0-1__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__99-0-0-1__depth_3.log
 
@@ -690,7 +694,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-0-100__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-0-100__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-0-100__depth_3.log
 
@@ -714,7 +718,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__100-0-0-0__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__100-0-0-0__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__100-0-0-0__depth_3.log
 ### pmse only
@@ -733,7 +737,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-100-0-0__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-100-0-0__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-100-0-0__depth_3.log
 ### mae only
@@ -752,7 +756,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-100-0__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-100-0__depth_3.log
 ### lpips only
@@ -771,7 +775,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 2.5e-5 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_mse_pmse_mae_lpips__0-0-0-100__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_mse_pmse_mae_lpips__0-0-0-100__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_mse_pmse_mae_lpips__0-0-0-100__depth_3.log
 
@@ -791,7 +795,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 5e-6 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_sliding_stats_mse_pmse_mae_lpips__10-40-40-10__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_sliding_stats_mse_pmse_mae_lpips__10-40-40-10__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_multi_datasets_sliding_stats_mse_pmse_mae_lpips__10-40-40-10__depth_3.log
 
@@ -810,7 +814,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 5e-6 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_sliding_stats_mse_pmse_mae_lpips__30-60-5-5__depth_3 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_sliding_stats_mse_pmse_mae_lpips__30-60-5-5__depth_3 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_multi_datasets_sliding_stats_mse_pmse_mae_lpips__30-60-5-5__depth_3.log
 
@@ -827,7 +831,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 5e-6 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_sliding_stats_mse_pmse_mae_lpips__30-60-5-5 \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_sliding_stats_mse_pmse_mae_lpips__30-60-5-5 \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_multi_datasets_sliding_stats_mse_pmse_mae_lpips__30-60-5-5.log
 
@@ -841,7 +845,7 @@ uv run python -u train_cli.py \
 --ema_decay 0.995 --ema_update_every 1  \
 --lr_schedule poly --lr_warmup_epochs 3 --lr_warmup_start_factor 0.1 \
 --lr_poly_power 0.9 --lr_min 5e-6 --lr 5.000e-05 \
---output_dir checkpoints/checkpoints_sliding_stats_mse --print_model_summary \
+--output_dir ${CHECKPOINTS_ROOT}/checkpoints_sliding_stats_mse --print_model_summary \
 --data_folder /Users/donaldpg/synthoseis/fake_data  \
 2>&1 | tee -a logs/train_multi_datasets_sliding_stats_mse.log
 

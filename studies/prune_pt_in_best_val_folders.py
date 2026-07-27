@@ -25,6 +25,7 @@ from pathlib import Path
 
 
 EPOCH_RE = re.compile(r"^checkpoint_epoch_(\d+)\.pt$")
+DEFAULT_CHECKPOINTS_ROOT = Path("/Volumes/Crucial X9/pretrain_v2_checkpoints")
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,8 +38,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("checkpoints"),
-        help="Root folder to scan for best_val_epoch.pt files (default: checkpoints)",
+        default=DEFAULT_CHECKPOINTS_ROOT,
+        help=f"Root folder to scan for best_val_epoch.pt files (default: {DEFAULT_CHECKPOINTS_ROOT})",
     )
     parser.add_argument(
         "--apply",

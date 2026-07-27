@@ -13,6 +13,9 @@ from synthoseis_pre_train.pretrain import (
 )
 
 
+DEFAULT_CHECKPOINTS_DIR = "/Volumes/Crucial X9/pretrain_v2_checkpoints"
+
+
 def _normalize_data_paths(data_paths: list[str], dataset_glob: str) -> list[str]:
     normalized: list[str] = []
     for raw_path in data_paths:
@@ -154,8 +157,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Optional fixed number of real-test batches per epoch.")
     parser.add_argument("--refresh_every_batches", type=int, default=10,
                        help="Deprecated compatibility flag; dataset discovery/pruning now happens only at epoch boundaries.")
-    parser.add_argument("--output_dir", type=str, default="./checkpoints",
-                       help="Output directory for checkpoints")
+    parser.add_argument("--output_dir", type=str, default=DEFAULT_CHECKPOINTS_DIR,
+                       help=f"Output directory for checkpoints (default: {DEFAULT_CHECKPOINTS_DIR})")
     parser.add_argument(
         "--backup_dir",
         type=str,

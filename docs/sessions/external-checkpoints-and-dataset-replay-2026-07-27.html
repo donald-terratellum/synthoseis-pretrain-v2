@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary: External Checkpoints and Dataset Replay (2026-07-27)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; max-width: 980px; margin: 40px auto; padding: 0 20px; color: #111; }
+    h1, h2 { line-height: 1.2; }
+    h1 { margin-bottom: 0.2em; }
+    .meta { color: #555; margin-bottom: 2rem; }
+    code { background: #f5f5f5; padding: 0.1rem 0.3rem; border-radius: 4px; }
+    ul { margin-top: 0.4rem; }
+    li { margin-bottom: 0.35rem; }
+  </style>
+</head>
+<body>
+  <h1>Session Summary: External Checkpoints and Dataset Replay</h1>
+  <div class="meta">Date: 2026-07-27 | Implemented by GitHub Copilot with workspace owner <code>donaldpg</code></div>
+
+  <h2>Context and Goals</h2>
+  <ul>
+    <li>Move training checkpoints off the nearly full main drive to <code>/Volumes/Crucial X9/pretrain_v2_checkpoints</code>.</li>
+    <li>Update training entrypoints, wrappers, and study scripts to use the external checkpoints root.</li>
+    <li>Add a replay tool to recreate existing SynthoSeis datasets under <code>/Volumes/Crucial X9/fake_data</code> using <code>--zarr-out segmentation</code>.</li>
+    <li>Work around filesystem constraints and verify regenerated outputs before replacing old folders.</li>
+  </ul>
+
+  <h2>What Was Done</h2>
+  <ul>
+    <li>Moved the existing <code>checkpoints</code> tree to <code>/Volumes/Crucial X9/pretrain_v2_checkpoints</code> and replaced the workspace path with a symlink.</li>
+    <li>Updated <code>train_cli.py</code> so the default checkpoint output directory points at the external drive.</li>
+    <li>Updated <code>studies/run_top10_retrain_loop.py</code>, <code>studies/run_random_training_sweep.py</code>, <code>studies/prune_pt_in_best_val_folders.py</code>, <code>studies/copy_best_val_epoch.py</code>, and <code>studies/list_real_seismic_inference_metrics.py</code> to reference the external checkpoint root.</li>
+    <li>Updated shell wrappers including <code>train_multi_datasets.sh</code>, <code>checkpoints_dry_run_cleanup.sh</code>, and <code>train_cli__experiments.sh</code> to use the new root.</li>
+    <li>Added <code>studies/recreate_datasets_with_segmentation.py</code> to replay dataset generation from saved config JSONs, force segmentation output, verify outputs, and replace old folders only after verification.</li>
+    <li>Hardened the replay script to tolerate zarr v3 APIs, skip incomplete partial folders, stage regeneration on local APFS storage, and tolerate transient missing-file cleanup races.</li>
+  </ul>
+
+  <h2>How Was It Done</h2>
+  <ul>
+    <li>Used targeted inspection of the existing training and generation entrypoints to find hardcoded checkpoint roots and replay behavior.</li>
+    <li>Replaced local checkpoint defaults with <code>/Volumes/Crucial X9/pretrain_v2_checkpoints</code> in the Python and bash wrappers that own output paths.</li>
+    <li>Wrote the replay tool to discover complete dataset folders, read each folder’s config JSON, override <code>project_folder</code> and <code>work_folder</code>, generate in a local APFS staging folder, verify dataset key lists and model-parameter text values, promote staged output into the external fake-data root, and delete the old folder only after verification succeeds.</li>
+    <li>Verified the replay logic against the first dataset after handling zarr v3 traversal differences and the expected key-list expansion from essential to segmentation.</li>
+  </ul>
+
+  <h2>When It Was Done and By Whom</h2>
+  <ul>
+    <li>Date: 2026-07-27</li>
+    <li>Implemented by: GitHub Copilot collaborating with the workspace owner (<code>donaldpg</code>).</li>
+    <li>Validation was performed during the same session with targeted script compilation and dry-run checks.</li>
+  </ul>
+
+  <h2>Basic Info</h2>
+  <ul>
+    <li>Files modified in this session: <code>train_cli.py</code>, <code>studies/run_top10_retrain_loop.py</code>, <code>studies/run_random_training_sweep.py</code>, <code>studies/prune_pt_in_best_val_folders.py</code>, <code>studies/copy_best_val_epoch.py</code>, <code>studies/list_real_seismic_inference_metrics.py</code>, <code>studies/recreate_datasets_with_segmentation.py</code>, <code>train_multi_datasets.sh</code>, <code>checkpoints_dry_run_cleanup.sh</code>, <code>train_cli__experiments.sh</code>, <code>generate_datasets.sh</code>.</li>
+    <li>Filesystem changes made in session: the workspace <code>checkpoints</code> path now points to <code>/Volumes/Crucial X9/pretrain_v2_checkpoints</code>; dataset regeneration now targets <code>/Volumes/Crucial X9/fake_data</code>.</li>
+    <li>No commit had been created yet at the time this summary was written.</li>
+  </ul>
+
+  <h2>Next and/or Future Follow-Up Work Suggestions</h2>
+  <ul>
+    <li>Run the replay script in small batches first, then finish the full dataset migration with <code>--continue-on-error</code> if desired.</li>
+    <li>Consider adding an automatic cleanup mode for partial <code>seismic__*__synthoseis_run_*</code> folders from aborted runs.</li>
+    <li>If desired, add a stricter content checksum comparison for regenerated datasets beyond the current key-list and text-metric checks.</li>
+    <li>Consider fixing the remaining SynthoSeis <code>main.py</code> syntax bug before any future regeneration runs that invoke the repository copy under <code>/Users/donaldpg/synthoseis/synthoseis</code>.</li>
+  </ul>
+</body>
+</html>

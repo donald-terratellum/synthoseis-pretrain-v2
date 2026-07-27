@@ -22,6 +22,13 @@ from pathlib import Path
 from typing import Any
 
 
+CHECKPOINTS_ROOT = Path("/Volumes/Crucial X9/pretrain_v2_checkpoints")
+
+
+def _checkpoint_dir(name: str) -> str:
+    return str(CHECKPOINTS_ROOT / name)
+
+
 @dataclass(frozen=True)
 class ModelSpec:
     name: str
@@ -37,13 +44,13 @@ class ModelSpec:
 
 
 TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
-    ModelSpec("checkpoint_copilot_1", "checkpoints/checkpoint_copilot_1", 3, (40, 80, 160), "deeper", 0.995, 0.005, 0.0, 0.0, 1e-5),
-    ModelSpec("checkpoint_copilot_2", "checkpoints/checkpoint_copilot_2", 3, (40, 88, 176), "deeper", 0.995, 0.005, 0.001, 0.0, 1e-5),
-    ModelSpec("checkpoint_copilot_4", "checkpoints/checkpoint_copilot_4", 4, (40, 80, 160, 256), "deeper", 0.995, 0.005, 0.0, 0.0, 1e-5),
-    ModelSpec("checkpoint_copilot_5", "checkpoints/checkpoint_copilot_5", 4, (44, 88, 176, 256), "deeper", 0.995, 0.005, 0.001, 0.0, 1e-5),
+    ModelSpec("checkpoint_copilot_1", _checkpoint_dir("checkpoint_copilot_1"), 3, (40, 80, 160), "deeper", 0.995, 0.005, 0.0, 0.0, 1e-5),
+    ModelSpec("checkpoint_copilot_2", _checkpoint_dir("checkpoint_copilot_2"), 3, (40, 88, 176), "deeper", 0.995, 0.005, 0.001, 0.0, 1e-5),
+    ModelSpec("checkpoint_copilot_4", _checkpoint_dir("checkpoint_copilot_4"), 4, (40, 80, 160, 256), "deeper", 0.995, 0.005, 0.0, 0.0, 1e-5),
+    ModelSpec("checkpoint_copilot_5", _checkpoint_dir("checkpoint_copilot_5"), 4, (44, 88, 176, 256), "deeper", 0.995, 0.005, 0.001, 0.0, 1e-5),
     ModelSpec(
         "sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010",
-        "checkpoints/sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010",
+        _checkpoint_dir("sweep_20260621_104613_r001_u4_h40-74-138-256_lp0p000_tv0p010"),
         4,
         (40, 74, 138, 256),
         "deeper",
@@ -55,7 +62,7 @@ TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         "sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010",
-        "checkpoints/sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010",
+        _checkpoint_dir("sweep_20260622_085428_r011_u4_h32-64-128-256_lp0p000_tv0p010"),
         4,
         (32, 64, 128, 256),
         "baseline",
@@ -67,7 +74,7 @@ TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         "sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001",
-        "checkpoints/sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001",
+        _checkpoint_dir("sweep_20260620_035309_r004_u3_h40-80-160_lp0p000_tv0p001"),
         3,
         (40, 80, 160),
         "deeper",
@@ -79,7 +86,7 @@ TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         "sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001",
-        "checkpoints/sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001",
+        _checkpoint_dir("sweep_20260620_080306_r006_u3_h32-64-128_lp0p000_tv0p001"),
         3,
         (32, 64, 128),
         "deeper",
@@ -91,7 +98,7 @@ TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         "sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000",
-        "checkpoints/sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000",
+        _checkpoint_dir("sweep_20260619_170551_r001_u4_h40-74-138-256_lp0p000_tv0p000"),
         4,
         (40, 74, 138, 256),
         "deeper",
@@ -103,7 +110,7 @@ TOP_10_MODEL_SPECS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         "sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001",
-        "checkpoints/sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001",
+        _checkpoint_dir("sweep_20260621_232252_r007_u4_h40-74-138-256_lp0p000_tv0p001"),
         4,
         (40, 74, 138, 256),
         "deepest",
@@ -135,7 +142,7 @@ def cumulative_targets(increments: list[int]) -> list[int]:
 
 
 def _default_state_path() -> Path:
-    return Path("checkpoints") / "top10_retrain_loop_state.json"
+    return CHECKPOINTS_ROOT / "top10_retrain_loop_state.json"
 
 
 def _load_state(path: Path) -> dict[str, Any]:

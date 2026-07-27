@@ -343,7 +343,7 @@ for (( i=0; i<NUM_RUNS; i++ )); do
         -r "_${run_tag}" \
         -c "$CONFIG" \
         --telemetry \
-        --zarr-out essential \
+        --zarr-out segmentation \
         2>&1 | tee "$log_file"
     popd > /dev/null
     run_elapsed_secs=$(( $(date +%s) - run_start_secs ))

@@ -79,6 +79,7 @@ INPUT_EXTREMA_PROB=${INPUT_EXTREMA_PROB:-1.0}
 INPUT_SPARSE_KEEP_PROB=${INPUT_SPARSE_KEEP_PROB:-0.0}
 INPUT_DECIMATE_TRILINEAR_PROB=${INPUT_DECIMATE_TRILINEAR_PROB:-0.0}
 RESUME=${RESUME:-""}
+CHECKPOINTS_ROOT=${CHECKPOINTS_ROOT:-"/Volumes/Crucial X9/pretrain_v2_checkpoints"}
 
 # Deep reconstruction head flag
 DEEP_RECONSTRUCTION_HEAD=${DEEP_RECONSTRUCTION_HEAD:-0}
@@ -351,7 +352,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --overnight           Enable overnight/unattended mode: applies safer thermal defaults"
       echo "                       (max-c 80, cooldown 420s, check every 5 batches, pressure=fair)"
       echo "                       and stability-first optimizer settings. Individual flags override."
-      echo "  --resume PATH         Resume from checkpoint file (e.g. checkpoints/partial_latest.pt)"
+      echo "  --resume PATH         Resume from checkpoint file (e.g. /Volumes/Crucial X9/pretrain_v2_checkpoints/partial_latest.pt)"
       echo "  --help                Show this help message"
       exit 0
       ;;
@@ -448,7 +449,7 @@ uv run python -u train_cli.py \
     --epochs "${MAX_EPOCHS}" \
     --sample_shape ${SAMPLE_SHAPE} \
     --device "${DEVICE}" \
-    --output_dir "checkpoints" \
+    --output_dir "${CHECKPOINTS_ROOT}" \
     --train_batches_per_epoch "${TRAIN_BATCHES_PER_EPOCH}" \
     --val_batches_per_epoch "${VAL_BATCHES_PER_EPOCH}" \
     --refresh_every_batches "${REFRESH_EVERY_BATCHES}" \

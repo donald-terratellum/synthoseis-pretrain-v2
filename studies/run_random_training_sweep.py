@@ -34,7 +34,7 @@ from synthoseis_pre_train.models import _resolve_encoder_stage_blocks
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKPOINTS_ROOT = ROOT / "checkpoints"
+CHECKPOINTS_ROOT = Path("/Volumes/Crucial X9/pretrain_v2_checkpoints")
 METRICS_CSV = CHECKPOINTS_ROOT / "epoch_component_metrics.csv"
 DEFAULT_DATA_FOLDER = Path("/Users/donaldpg/synthoseis/fake_data")
 
